@@ -76,3 +76,14 @@ npm run test:e2e
 - 卫星图加载失败：可能是网络受限，可切换回街道图。
 - 轨迹未显示：请确认 CSV 包含有效 `GPS` 列且坐标合法。
 - 中文列名乱码：请检查 CSV 编码，工具会自动尝试 UTF-8 与 gb18030/gbk。
+
+## Example Log (example_log)
+
+A sample CSV log is included in this repository for quick testing.
+
+- Directory: `example_log/`
+- File: `FPV --2026-02-13-142406.csv`
+- Quick start:
+  1. Run the app (`npm run dev`) or use the released build package.
+  2. Click `Upload CSV` in the UI.
+  3. Select `example_log/FPV --2026-02-13-142406.csv`.
