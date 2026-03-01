@@ -2,7 +2,7 @@
 
 基于 `React + TypeScript + Vite` 的 FPV 飞行日志可视化工具。  
 可直接在浏览器上传 EdgeTX 导出的 CSV，进行 2D/3D 轨迹查看、点位详情分析和回放。
-
+在线构建版本（可直接使用）：https://www.tuep.cn/fpv-log-viewer/
 ## 功能
 
 - 本地上传 CSV（无后端）
