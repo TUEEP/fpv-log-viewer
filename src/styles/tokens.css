@@ -1,0 +1,29 @@
+:root {
+  --bg-page: #0d1625;
+  --bg-surface: #14253a;
+  --bg-panel: #1a2a41;
+  --bg-muted: #102033;
+  --text-main: #e6f2ff;
+  --text-dim: #9bb3cb;
+  --line: #26435f;
+  --accent: #42b8ff;
+  --accent-soft: #7fd4ff;
+  --success: #47c779;
+  --danger: #ff615f;
+  --warning: #ffd25e;
+}
+
+:root[data-theme="light"] {
+  --bg-page: #f1f6fb;
+  --bg-surface: #fdfefe;
+  --bg-panel: #f6fbff;
+  --bg-muted: #ebf3fb;
+  --text-main: #0f2740;
+  --text-dim: #52708d;
+  --line: #bfd6eb;
+  --accent: #0b8ee5;
+  --accent-soft: #79c7f8;
+  --success: #1ba062;
+  --danger: #d53b3b;
+  --warning: #e2ab1e;
+}

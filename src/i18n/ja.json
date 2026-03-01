@@ -1,0 +1,49 @@
+{
+  "app": {
+    "title": "FPV フライトログビューア",
+    "empty": "EdgeTX CSV をアップロードしてください。"
+  },
+  "toolbar": {
+    "upload": "CSV アップロード",
+    "view2d": "2D",
+    "view3d": "3D",
+    "mapStyle": "地図",
+    "street": "街路",
+    "satellite": "衛星",
+    "altitude": "高度",
+    "alt1": "高度 #1",
+    "alt2": "高度 #2",
+    "language": "言語",
+    "theme": "テーマ",
+    "dark": "ダーク",
+    "light": "ライト",
+    "pointSize": "点サイズ",
+    "pointStride": "点の間引き",
+    "zScale": "Z スケール",
+    "fullscreen": "全画面"
+  },
+  "playback": {
+    "prev": "前フレーム",
+    "play": "再生",
+    "pause": "一時停止",
+    "next": "次フレーム",
+    "speed": "速度",
+    "frame": "フレーム",
+    "time": "時間"
+  },
+  "panel": {
+    "title": "軌跡ポイント詳細",
+    "time": "時間",
+    "latlon": "緯度 / 経度",
+    "distance": "距離",
+    "altitude": "高度",
+    "speed": "速度",
+    "voltage": "電圧",
+    "current": "電流",
+    "satellites": "衛星",
+    "mode": "モード",
+    "field": "項目",
+    "value": "値",
+    "noData": "データがありません。"
+  }
+}

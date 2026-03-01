@@ -1,0 +1,49 @@
+{
+  "app": {
+    "title": "FPV 飞行日志查看器",
+    "empty": "上传 EdgeTX CSV 后开始查看轨迹"
+  },
+  "toolbar": {
+    "upload": "上传 CSV",
+    "view2d": "2D",
+    "view3d": "3D",
+    "mapStyle": "地图",
+    "street": "街道",
+    "satellite": "卫星",
+    "altitude": "高度",
+    "alt1": "高度 #1",
+    "alt2": "高度 #2",
+    "language": "语言",
+    "theme": "主题",
+    "dark": "暗黑",
+    "light": "明亮",
+    "pointSize": "点大小",
+    "pointStride": "点简化",
+    "zScale": "Z 缩放",
+    "fullscreen": "全屏"
+  },
+  "playback": {
+    "prev": "上一帧",
+    "play": "播放",
+    "pause": "暂停",
+    "next": "下一帧",
+    "speed": "速度",
+    "frame": "帧",
+    "time": "时间"
+  },
+  "panel": {
+    "title": "轨迹点详情",
+    "time": "时间",
+    "latlon": "Lat / Lon",
+    "distance": "里程",
+    "altitude": "高度",
+    "speed": "速度",
+    "voltage": "电压",
+    "current": "电流",
+    "satellites": "卫星",
+    "mode": "模式",
+    "field": "字段",
+    "value": "值",
+    "noData": "暂无数据"
+  }
+}

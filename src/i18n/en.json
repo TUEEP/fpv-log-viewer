@@ -1,0 +1,49 @@
+{
+  "app": {
+    "title": "FPV Flight Log Viewer",
+    "empty": "Upload an EdgeTX CSV to start."
+  },
+  "toolbar": {
+    "upload": "Upload CSV",
+    "view2d": "2D",
+    "view3d": "3D",
+    "mapStyle": "Map",
+    "street": "Street",
+    "satellite": "Satellite",
+    "altitude": "Altitude",
+    "alt1": "Altitude #1",
+    "alt2": "Altitude #2",
+    "language": "Language",
+    "theme": "Theme",
+    "dark": "Dark",
+    "light": "Light",
+    "pointSize": "Point Size",
+    "pointStride": "Point Simplify",
+    "zScale": "Z Scale",
+    "fullscreen": "Fullscreen"
+  },
+  "playback": {
+    "prev": "Prev",
+    "play": "Play",
+    "pause": "Pause",
+    "next": "Next",
+    "speed": "Speed",
+    "frame": "Frame",
+    "time": "Time"
+  },
+  "panel": {
+    "title": "Track Point Details",
+    "time": "Time",
+    "latlon": "Lat / Lon",
+    "distance": "Distance",
+    "altitude": "Altitude",
+    "speed": "Speed",
+    "voltage": "Voltage",
+    "current": "Current",
+    "satellites": "Satellites",
+    "mode": "Mode",
+    "field": "Field",
+    "value": "Value",
+    "noData": "No data."
+  }
+}
