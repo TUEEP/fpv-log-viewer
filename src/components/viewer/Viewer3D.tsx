@@ -6,6 +6,7 @@ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildTileUrl, getRasterTileConfig } from "../../lib/map/rasterTiles";
+import { resolveTrailRange } from "../../lib/playback/trailWindow";
 import type { AltitudeMode, FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 
 interface Viewer3DProps {
@@ -16,6 +17,7 @@ interface Viewer3DProps {
   zScale: number;
   selectedIndex: number;
   currentIndex: number;
+  isPlaying: boolean;
   pointSize: number;
   pointStride: number;
   onSelect: (index: number) => void;
@@ -68,9 +70,6 @@ interface TileTextureCacheEntry {
 
 interface SceneData {
   localTrackPoints: LocalTrackPoint[];
-  markers: MarkerData[];
-  speedPositions: Float32Array | null;
-  speedColors: Float32Array | null;
   target: [number, number, number];
   xySpan: number;
   zSpan: number;
@@ -97,6 +96,7 @@ const SKY_BOTTOM_COLOR = "#5b7688";
 const FOG_COLOR = SKY_HORIZON_COLOR;
 const GROUND_HAZE_INNER_COLOR = "#4b6477";
 const GROUND_HAZE_OUTER_COLOR = "#7f99ac";
+const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
 
 const SKY_VERTEX_SHADER = `
 varying float vHeight;
@@ -593,6 +593,7 @@ export function Viewer3D({
   zScale,
   selectedIndex,
   currentIndex,
+  isPlaying,
   pointSize,
   pointStride,
   onSelect
@@ -627,13 +628,15 @@ export function Viewer3D({
 
   const tileConfig = useMemo(() => getRasterTileConfig(mapProvider, mapStyle), [mapProvider, mapStyle]);
 
+  const trailRange = useMemo(
+    () => resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS),
+    [points, currentIndex, isPlaying]
+  );
+
   const sceneData = useMemo<SceneData>(() => {
     if (displayGeoPoints.length === 0) {
       return {
         localTrackPoints: [],
-        markers: [],
-        speedPositions: null,
-        speedColors: null,
         target: [0, 0, 0],
         xySpan: 120,
         zSpan: 80,
@@ -675,83 +678,6 @@ export function Viewer3D({
       };
     });
 
-    const includeIndexes = new Set<number>();
-    points.forEach((_, index) => {
-      if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
-        includeIndexes.add(index);
-      }
-      if (index === selectedIndex || index === currentIndex) {
-        includeIndexes.add(index);
-      }
-    });
-
-    const markers: MarkerData[] = [];
-    includeIndexes.forEach((index) => {
-      const point = localTrackPoints[index];
-      if (!point) {
-        return;
-      }
-      markers.push({
-        index,
-        role: index === 0 ? "start" : index === points.length - 1 ? "end" : "middle",
-        isCurrent: index === currentIndex,
-        isSelected: index === selectedIndex,
-        position: [point.x, point.y, point.z]
-      });
-    });
-
-    let speedPositions: Float32Array | null = null;
-    let speedColors: Float32Array | null = null;
-
-    if (localTrackPoints.length > 1) {
-      const segmentSpeeds: number[] = [];
-      for (let i = 0; i < localTrackPoints.length - 1; i += 1) {
-        const current = displayGeoPoints[i];
-        const next = displayGeoPoints[i + 1];
-        const currentLocal = localTrackPoints[i];
-        const nextLocal = localTrackPoints[i + 1];
-
-        const speedFromCsv =
-          current && typeof current.speedKmh === "number" && Number.isFinite(current.speedKmh)
-            ? current.speedKmh
-            : next && typeof next.speedKmh === "number" && Number.isFinite(next.speedKmh)
-              ? next.speedKmh
-              : null;
-
-        const speed =
-          speedFromCsv ?? pickFallbackSpeedKmh(current, next, currentLocal, nextLocal);
-        segmentSpeeds.push(Math.max(0, speed));
-      }
-
-      const minSpeed = Math.min(...segmentSpeeds);
-      const maxSpeed = Math.max(...segmentSpeeds);
-      speedPositions = new Float32Array(segmentSpeeds.length * 6);
-      speedColors = new Float32Array(segmentSpeeds.length * 6);
-
-      let offset = 0;
-      for (let i = 0; i < segmentSpeeds.length; i += 1) {
-        const start = localTrackPoints[i];
-        const end = localTrackPoints[i + 1];
-        const color = speedColor(segmentSpeeds[i], minSpeed, maxSpeed);
-
-        speedPositions[offset] = start.x;
-        speedPositions[offset + 1] = start.y;
-        speedPositions[offset + 2] = start.z;
-        speedPositions[offset + 3] = end.x;
-        speedPositions[offset + 4] = end.y;
-        speedPositions[offset + 5] = end.z;
-
-        speedColors[offset] = color.r;
-        speedColors[offset + 1] = color.g;
-        speedColors[offset + 2] = color.b;
-        speedColors[offset + 3] = color.r;
-        speedColors[offset + 4] = color.g;
-        speedColors[offset + 5] = color.b;
-
-        offset += 6;
-      }
-    }
-
     const xySpan = Math.max(maxX - minX, maxY - minY, 120);
     const zSpan = Math.max(maxZ - minZ, 60);
     const target: [number, number, number] = [
@@ -762,9 +688,6 @@ export function Viewer3D({
 
     return {
       localTrackPoints,
-      markers,
-      speedPositions,
-      speedColors,
       target,
       xySpan,
       zSpan,
@@ -776,23 +699,141 @@ export function Viewer3D({
     };
   }, [
     displayGeoPoints,
-    points,
-    selectedIndex,
-    currentIndex,
-    pointStride,
     zScale
   ]);
 
+  const markers = useMemo<MarkerData[]>(() => {
+    if (sceneData.localTrackPoints.length === 0) {
+      return [];
+    }
+
+    const includeIndexes = new Set<number>();
+    if (isPlaying && trailRange.endIndex >= 0) {
+      for (let index = trailRange.startIndex; index <= trailRange.endIndex; index += 1) {
+        includeIndexes.add(index);
+      }
+    } else {
+      points.forEach((_, index) => {
+        if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
+          includeIndexes.add(index);
+        }
+      });
+    }
+
+    if (selectedIndex >= 0 && selectedIndex < points.length) {
+      includeIndexes.add(selectedIndex);
+    }
+    if (currentIndex >= 0 && currentIndex < points.length) {
+      includeIndexes.add(currentIndex);
+    }
+
+    const nextMarkers: MarkerData[] = [];
+    includeIndexes.forEach((index) => {
+      if (isPlaying && trailRange.endIndex >= 0) {
+        if (index < trailRange.startIndex || index > trailRange.endIndex) {
+          return;
+        }
+      }
+
+      const point = sceneData.localTrackPoints[index];
+      if (!point) {
+        return;
+      }
+
+      nextMarkers.push({
+        index,
+        role: index === 0 ? "start" : index === points.length - 1 ? "end" : "middle",
+        isCurrent: index === currentIndex,
+        isSelected: index === selectedIndex,
+        position: [point.x, point.y, point.z]
+      });
+    });
+
+    return nextMarkers;
+  }, [
+    sceneData.localTrackPoints,
+    points,
+    pointStride,
+    selectedIndex,
+    currentIndex,
+    isPlaying,
+    trailRange.startIndex,
+    trailRange.endIndex
+  ]);
+
   const speedGeometry = useMemo(() => {
-    if (!sceneData.speedPositions || !sceneData.speedColors) {
+    const pointCount = sceneData.localTrackPoints.length;
+    if (pointCount <= 1 || displayGeoPoints.length <= 1) {
       return null;
     }
 
+    const maxSegmentIndex = Math.min(pointCount, displayGeoPoints.length) - 1;
+    const startIndex = isPlaying && trailRange.endIndex >= 0 ? trailRange.startIndex : 0;
+    const endIndex = isPlaying && trailRange.endIndex >= 0 ? trailRange.endIndex : maxSegmentIndex;
+    const segmentCount = Math.max(0, Math.min(endIndex, maxSegmentIndex) - startIndex);
+    if (segmentCount <= 0) {
+      return null;
+    }
+
+    const segmentSpeeds: number[] = [];
+    for (let i = startIndex; i < startIndex + segmentCount; i += 1) {
+      const current = displayGeoPoints[i];
+      const next = displayGeoPoints[i + 1];
+      const currentLocal = sceneData.localTrackPoints[i];
+      const nextLocal = sceneData.localTrackPoints[i + 1];
+
+      const speedFromCsv =
+        typeof current.speedKmh === "number" && Number.isFinite(current.speedKmh)
+          ? current.speedKmh
+          : typeof next.speedKmh === "number" && Number.isFinite(next.speedKmh)
+            ? next.speedKmh
+            : null;
+      const speed = speedFromCsv ?? pickFallbackSpeedKmh(current, next, currentLocal, nextLocal);
+      segmentSpeeds.push(Math.max(0, speed));
+    }
+
+    if (segmentSpeeds.length === 0) {
+      return null;
+    }
+
+    const minSpeed = Math.min(...segmentSpeeds);
+    const maxSpeed = Math.max(...segmentSpeeds);
+    const speedPositions = new Float32Array(segmentSpeeds.length * 6);
+    const speedColors = new Float32Array(segmentSpeeds.length * 6);
+
+    let offset = 0;
+    for (let i = 0; i < segmentSpeeds.length; i += 1) {
+      const segmentStart = sceneData.localTrackPoints[startIndex + i];
+      const segmentEnd = sceneData.localTrackPoints[startIndex + i + 1];
+
+      const color = speedColor(segmentSpeeds[i], minSpeed, maxSpeed);
+      speedPositions[offset] = segmentStart.x;
+      speedPositions[offset + 1] = segmentStart.y;
+      speedPositions[offset + 2] = segmentStart.z;
+      speedPositions[offset + 3] = segmentEnd.x;
+      speedPositions[offset + 4] = segmentEnd.y;
+      speedPositions[offset + 5] = segmentEnd.z;
+
+      speedColors[offset] = color.r;
+      speedColors[offset + 1] = color.g;
+      speedColors[offset + 2] = color.b;
+      speedColors[offset + 3] = color.r;
+      speedColors[offset + 4] = color.g;
+      speedColors[offset + 5] = color.b;
+      offset += 6;
+    }
+
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(sceneData.speedPositions, 3));
-    geometry.setAttribute("color", new THREE.BufferAttribute(sceneData.speedColors, 3));
+    geometry.setAttribute("position", new THREE.BufferAttribute(speedPositions, 3));
+    geometry.setAttribute("color", new THREE.BufferAttribute(speedColors, 3));
     return geometry;
-  }, [sceneData.speedPositions, sceneData.speedColors]);
+  }, [
+    sceneData.localTrackPoints,
+    displayGeoPoints,
+    isPlaying,
+    trailRange.startIndex,
+    trailRange.endIndex
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1026,7 +1067,7 @@ export function Viewer3D({
           </lineSegments>
         ) : null}
 
-        {sceneData.markers.map((marker) => (
+        {markers.map((marker) => (
           <mesh
             key={marker.index}
             position={marker.position}

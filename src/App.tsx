@@ -162,6 +162,7 @@ export default function App() {
               smoothedTrack={smoothedTrack}
               selectedIndex={selectedIndex}
               currentIndex={playback.currentIndex}
+              isPlaying={playback.isPlaying}
               mapProvider={mapProvider}
               mapStyle={mapStyle}
               pointSize={pointSize}
@@ -177,6 +178,7 @@ export default function App() {
               zScale={zScale}
               selectedIndex={selectedIndex}
               currentIndex={playback.currentIndex}
+              isPlaying={playback.isPlaying}
               pointSize={pointSize}
               pointStride={pointStride}
               onSelect={handlePointSelect}

@@ -3,12 +3,14 @@ import maplibregl from "maplibre-gl";
 import type { FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildRasterStyle } from "../../lib/map/rasterTiles";
+import { resolveTrailRange } from "../../lib/playback/trailWindow";
 
 interface Viewer2DProps {
   points: FlightPoint[];
   smoothedTrack: [number, number][];
   selectedIndex: number;
   currentIndex: number;
+  isPlaying: boolean;
   mapProvider: MapProvider;
   mapStyle: MapStyleMode;
   pointSize: number;
@@ -30,6 +32,7 @@ const LAYER_START = "fpv-point-start";
 const LAYER_END = "fpv-point-end";
 const LAYER_CURRENT = "fpv-point-current";
 const LAYER_SELECTED = "fpv-point-selected";
+const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
 
 function ensureLayers(map: maplibregl.Map) {
   if (!map.getSource(SOURCE_SMOOTH)) {
@@ -145,6 +148,7 @@ export function Viewer2D({
   smoothedTrack,
   selectedIndex,
   currentIndex,
+  isPlaying,
   mapProvider,
   mapStyle,
   pointSize,
@@ -251,15 +255,37 @@ export function Viewer2D({
   }, [points, mapProvider]);
 
   const displaySmoothedTrack = useMemo<[number, number][]>(() => {
-    if (mapProvider !== "amap") {
-      return smoothedTrack;
+    const trailRange = resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS);
+    if (trailRange.endIndex < 0) {
+      return [];
     }
 
-    return smoothedTrack.map(([lon, lat]) => {
+    let sourceTrack: [number, number][] = smoothedTrack;
+    if (isPlaying && points.length > 1 && smoothedTrack.length > 1) {
+      const samplePerSegment = Math.max(
+        1,
+        Math.round((smoothedTrack.length - 1) / Math.max(points.length - 1, 1))
+      );
+      const startOffset = Math.max(
+        0,
+        Math.min(smoothedTrack.length - 1, trailRange.startIndex * samplePerSegment)
+      );
+      const endOffset = Math.max(
+        startOffset,
+        Math.min(smoothedTrack.length - 1, trailRange.endIndex * samplePerSegment)
+      );
+      sourceTrack = smoothedTrack.slice(startOffset, endOffset + 1);
+    }
+
+    if (mapProvider !== "amap") {
+      return sourceTrack;
+    }
+
+    return sourceTrack.map(([lon, lat]) => {
       const converted = wgs84ToGcj02(lon, lat);
       return [converted.lon, converted.lat];
     });
-  }, [smoothedTrack, mapProvider]);
+  }, [smoothedTrack, mapProvider, points, currentIndex, isPlaying]);
 
   const pointFeatures = useMemo(() => {
     const result: Array<Record<string, unknown>> = [];
@@ -267,17 +293,37 @@ export function Viewer2D({
       return result;
     }
 
+    const trailRange = resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS);
     const includeIndexes = new Set<number>();
-    points.forEach((_, index) => {
-      if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
+
+    if (trailRange.endIndex >= 0 && isPlaying) {
+      for (let index = trailRange.startIndex; index <= trailRange.endIndex; index += 1) {
         includeIndexes.add(index);
       }
-      if (index === selectedIndex || index === currentIndex) {
-        includeIndexes.add(index);
-      }
-    });
+    } else {
+      points.forEach((_, index) => {
+        if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
+          includeIndexes.add(index);
+        }
+        if (index === selectedIndex || index === currentIndex) {
+          includeIndexes.add(index);
+        }
+      });
+    }
+
+    if (selectedIndex >= 0 && selectedIndex < points.length) {
+      includeIndexes.add(selectedIndex);
+    }
+    if (currentIndex >= 0 && currentIndex < points.length) {
+      includeIndexes.add(currentIndex);
+    }
 
     includeIndexes.forEach((index) => {
+      if (isPlaying && trailRange.endIndex >= 0) {
+        if (index < trailRange.startIndex || index > trailRange.endIndex) {
+          return;
+        }
+      }
       const point = points[index];
       const displayPoint = displayPoints[index];
       if (!point) {
@@ -310,7 +356,7 @@ export function Viewer2D({
     });
 
     return result;
-  }, [points, displayPoints, pointStride, selectedIndex, currentIndex]);
+  }, [points, displayPoints, pointStride, selectedIndex, currentIndex, isPlaying]);
 
   useEffect(() => {
     smoothedTrackRef.current = displaySmoothedTrack;
