@@ -85,19 +85,17 @@ export function TopToolbar({
           </button>
         </div>
 
-        {viewMode === "2d" ? (
-          <label className="inline-control">
-            <span>{t("toolbar.mapSource", { defaultValue: "Map Source" })}</span>
-            <select
-              className="control-select"
-              value={mapProvider}
-              onChange={(event) => setMapProvider(event.target.value as MapProvider)}
-            >
-              <option value="osm">{t("toolbar.sourceOsm", { defaultValue: "OpenStreetMap" })}</option>
-              <option value="amap">{t("toolbar.sourceAmap", { defaultValue: "Amap" })}</option>
-            </select>
-          </label>
-        ) : null}
+        <label className="inline-control">
+          <span>{t("toolbar.mapSource", { defaultValue: "Map Source" })}</span>
+          <select
+            className="control-select"
+            value={mapProvider}
+            onChange={(event) => setMapProvider(event.target.value as MapProvider)}
+          >
+            <option value="osm">{t("toolbar.sourceOsm", { defaultValue: "OpenStreetMap" })}</option>
+            <option value="amap">{t("toolbar.sourceAmap", { defaultValue: "Amap" })}</option>
+          </select>
+        </label>
 
         <label className="inline-control">
           <span>{t("toolbar.mapStyle")}</span>

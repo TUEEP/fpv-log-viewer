@@ -20,7 +20,10 @@
     "pointSize": "点大小",
     "pointStride": "点简化",
     "zScale": "Z 缩放",
-    "fullscreen": "全屏"
+    "fullscreen": "全屏",
+    "mapSource": "地图源",
+    "sourceOsm": "OpenStreetMap",
+    "sourceAmap": "高德"
   },
   "playback": {
     "prev": "上一帧",
@@ -45,5 +48,12 @@
     "field": "字段",
     "value": "值",
     "noData": "暂无数据"
+  },
+  "viewer3d": {
+    "perspective": "透视",
+    "top": "俯视",
+    "side": "侧视",
+    "slow": "慢",
+    "fast": "快"
   }
 }

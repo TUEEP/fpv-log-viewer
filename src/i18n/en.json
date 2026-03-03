@@ -20,7 +20,10 @@
     "pointSize": "Point Size",
     "pointStride": "Point Simplify",
     "zScale": "Z Scale",
-    "fullscreen": "Fullscreen"
+    "fullscreen": "Fullscreen",
+    "mapSource": "Map Source",
+    "sourceOsm": "OpenStreetMap",
+    "sourceAmap": "Amap"
   },
   "playback": {
     "prev": "Prev",
@@ -45,5 +48,12 @@
     "field": "Field",
     "value": "Value",
     "noData": "No data."
+  },
+  "viewer3d": {
+    "perspective": "Perspective",
+    "top": "Top",
+    "side": "Side",
+    "slow": "Slow",
+    "fast": "Fast"
   }
 }

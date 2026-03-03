@@ -172,6 +172,8 @@ export default function App() {
             <Viewer3D
               points={points}
               altitudeMode={altitudeMode}
+              mapProvider={mapProvider}
+              mapStyle={mapStyle}
               zScale={zScale}
               selectedIndex={selectedIndex}
               currentIndex={playback.currentIndex}

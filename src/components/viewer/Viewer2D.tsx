@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import type { FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
+import { buildRasterStyle } from "../../lib/map/rasterTiles";
 
 interface Viewer2DProps {
   points: FlightPoint[];
@@ -29,62 +30,6 @@ const LAYER_START = "fpv-point-start";
 const LAYER_END = "fpv-point-end";
 const LAYER_CURRENT = "fpv-point-current";
 const LAYER_SELECTED = "fpv-point-selected";
-
-function buildRasterStyle(provider: MapProvider, mode: MapStyleMode): maplibregl.StyleSpecification {
-  const isSatellite = mode === "satellite";
-  let tiles: string[];
-  let attribution: string;
-
-  if (provider === "amap") {
-    if (isSatellite) {
-      tiles = [
-        "https://webst01.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
-        "https://webst02.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
-        "https://webst03.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}",
-        "https://webst04.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}"
-      ];
-    } else {
-      tiles = [
-        "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
-        "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
-        "https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
-        "https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}"
-      ];
-    }
-    attribution = "Map data (c) AMap";
-  } else if (isSatellite) {
-    tiles = [
-      "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-    ];
-    attribution = "Tiles (c) Esri";
-  } else {
-    tiles = [
-      "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png"
-    ];
-    attribution = "(c) OpenStreetMap contributors";
-  }
-
-  return {
-    version: 8,
-    sources: {
-      base: {
-        type: "raster",
-        tiles,
-        tileSize: 256,
-        attribution
-      }
-    },
-    layers: [
-      {
-        id: "base-raster",
-        type: "raster",
-        source: "base"
-      }
-    ]
-  };
-}
 
 function ensureLayers(map: maplibregl.Map) {
   if (!map.getSource(SOURCE_SMOOTH)) {

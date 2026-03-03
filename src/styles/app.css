@@ -79,9 +79,62 @@ body {
 }
 
 .viewer-3d {
+  position: relative;
   background:
     radial-gradient(800px 460px at 40% 0%, rgba(64, 154, 214, 0.24), transparent),
     linear-gradient(180deg, var(--bg-panel), var(--bg-page));
+}
+
+.viewer-3d-view-buttons {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  display: inline-flex;
+  gap: 6px;
+  z-index: 5;
+}
+
+.viewer-3d-view-button {
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(161, 186, 214, 0.5);
+  background: rgba(9, 20, 34, 0.72);
+  color: #dce9f7;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+
+.viewer-3d-view-button.active {
+  border-color: #8ecbff;
+  background: rgba(42, 92, 136, 0.82);
+  color: #ffffff;
+}
+
+.viewer-3d-speed-legend {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 5;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(161, 186, 214, 0.5);
+  background: rgba(9, 20, 34, 0.72);
+  color: #dce9f7;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  backdrop-filter: blur(2px);
+}
+
+.viewer-3d-speed-gradient {
+  width: 90px;
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2f77ff 0%, #ff3f2c 100%);
 }
 
 .detail-panel {

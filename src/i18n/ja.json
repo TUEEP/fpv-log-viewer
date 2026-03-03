@@ -20,7 +20,10 @@
     "pointSize": "点サイズ",
     "pointStride": "点の間引き",
     "zScale": "Z スケール",
-    "fullscreen": "全画面"
+    "fullscreen": "全画面",
+    "mapSource": "地図ソース",
+    "sourceOsm": "OpenStreetMap",
+    "sourceAmap": "Amap"
   },
   "playback": {
     "prev": "前フレーム",
@@ -45,5 +48,12 @@
     "field": "項目",
     "value": "値",
     "noData": "データがありません。"
+  },
+  "viewer3d": {
+    "perspective": "透視",
+    "top": "俯瞰",
+    "side": "側面",
+    "slow": "遅い",
+    "fast": "速い"
   }
 }
