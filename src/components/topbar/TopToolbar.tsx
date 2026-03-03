@@ -32,6 +32,10 @@ interface TopToolbarProps {
   setPointStride: (stride: number) => void;
   zScale: number;
   setZScale: (scale: number) => void;
+  autoFollowMode: boolean;
+  setAutoFollowMode: (enabled: boolean) => void;
+  frontFollowMode: boolean;
+  setFrontFollowMode: (enabled: boolean) => void;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
 }
@@ -56,6 +60,10 @@ export function TopToolbar({
   setPointStride,
   zScale,
   setZScale,
+  autoFollowMode,
+  setAutoFollowMode,
+  frontFollowMode,
+  setFrontFollowMode,
   isFullscreen,
   onToggleFullscreen
 }: TopToolbarProps) {
@@ -84,6 +92,32 @@ export function TopToolbar({
             {t("toolbar.view3d")}
           </button>
         </div>
+
+        <label className="inline-control">
+          <span>{t("toolbar.followMode", { defaultValue: "Follow" })}</span>
+          <div className="segmented-control" role="group" aria-label="follow-mode">
+            <button
+              className={`segment ${autoFollowMode ? "active" : ""}`}
+              type="button"
+              onClick={() => setAutoFollowMode(!autoFollowMode)}
+              title={t("toolbar.followAutoHint", {
+                defaultValue: "Auto follow center and zoom while playing"
+              })}
+            >
+              {t("toolbar.followAuto", { defaultValue: "AUTO" })}
+            </button>
+            <button
+              className={`segment ${frontFollowMode ? "active" : ""}`}
+              type="button"
+              onClick={() => setFrontFollowMode(!frontFollowMode)}
+              title={t("toolbar.followFrontHint", {
+                defaultValue: "Keep camera facing movement direction while playing"
+              })}
+            >
+              {t("toolbar.followFront", { defaultValue: "FRONT" })}
+            </button>
+          </div>
+        </label>
 
         <label className="inline-control">
           <span>{t("toolbar.mapSource", { defaultValue: "Map Source" })}</span>

@@ -11,6 +11,8 @@ interface Viewer2DProps {
   selectedIndex: number;
   currentIndex: number;
   isPlaying: boolean;
+  autoFollowMode: boolean;
+  frontFollowMode: boolean;
   mapProvider: MapProvider;
   mapStyle: MapStyleMode;
   pointSize: number;
@@ -24,6 +26,18 @@ interface MapCoordPoint {
   lat: number;
 }
 
+interface FollowSnapshot2D {
+  current: MapCoordPoint;
+  lead: {
+    lon: number;
+    lat: number;
+  };
+  headingDeg: number | null;
+  speedMps: number;
+  turnRateDegPerSec: number;
+  lookAheadMs: number;
+}
+
 const SOURCE_SMOOTH = "fpv-smooth-track";
 const SOURCE_POINTS = "fpv-track-points";
 const LAYER_SMOOTH = "fpv-smooth-line";
@@ -33,6 +47,120 @@ const LAYER_END = "fpv-point-end";
 const LAYER_CURRENT = "fpv-point-current";
 const LAYER_SELECTED = "fpv-point-selected";
 const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
+const FOLLOW_LOOK_AHEAD_DEFAULT_MS = 1400;
+const FOLLOW_LOOK_AHEAD_MIN_MS = 700;
+const FOLLOW_LOOK_AHEAD_MAX_MS = 3200;
+const FOLLOW_MANUAL_HOLD_MS = 3000;
+const EARTH_RADIUS_M = 6378137;
+const DEG_TO_RAD = Math.PI / 180;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeBearingDeg(value: number): number {
+  let normalized = value % 360;
+  if (normalized > 180) {
+    normalized -= 360;
+  }
+  if (normalized <= -180) {
+    normalized += 360;
+  }
+  return normalized;
+}
+
+function bearingDiffDeg(target: number, source: number): number {
+  return normalizeBearingDeg(target - source);
+}
+
+function measureOffsetMeters(
+  from: { lon: number; lat: number },
+  to: { lon: number; lat: number }
+): { dx: number; dy: number; distance: number } {
+  const meanLat = ((from.lat + to.lat) * 0.5) * DEG_TO_RAD;
+  const cosLat = Math.max(Math.abs(Math.cos(meanLat)), 1e-6);
+  const dx = (to.lon - from.lon) * DEG_TO_RAD * EARTH_RADIUS_M * cosLat;
+  const dy = (to.lat - from.lat) * DEG_TO_RAD * EARTH_RADIUS_M;
+  return {
+    dx,
+    dy,
+    distance: Math.hypot(dx, dy)
+  };
+}
+
+function deriveHeadingDeg(from: { lon: number; lat: number }, to: { lon: number; lat: number }): number | null {
+  const offset = measureOffsetMeters(from, to);
+  if (offset.distance < 0.8) {
+    return null;
+  }
+  return normalizeBearingDeg((Math.atan2(offset.dx, offset.dy) * 180) / Math.PI);
+}
+
+function computeDynamicLookAheadMs(speedMps: number, turnRateDegPerSec: number): number {
+  const baseMs = 900;
+  const speedBoostMs = clamp(speedMps, 0, 42) * 60;
+  const turnPenalty = 1 - clamp((turnRateDegPerSec - 8) / 40, 0, 1) * 0.5;
+  const lookAheadMs = (baseMs + speedBoostMs) * turnPenalty;
+  return clamp(lookAheadMs, FOLLOW_LOOK_AHEAD_MIN_MS, FOLLOW_LOOK_AHEAD_MAX_MS);
+}
+
+function smoothLookAheadMs(previousMs: number, nextMs: number): number {
+  if (!Number.isFinite(previousMs) || previousMs <= 0) {
+    return nextMs;
+  }
+  const alpha = nextMs < previousMs ? 0.36 : 0.2;
+  return previousMs + (nextMs - previousMs) * alpha;
+}
+
+function resolveInterpolatedLeadCoord(
+  displayPoints: MapCoordPoint[],
+  points: FlightPoint[],
+  currentIndex: number,
+  lookAheadMs: number
+): { lon: number; lat: number } {
+  if (displayPoints.length === 0 || points.length === 0) {
+    return { lon: 0, lat: 0 };
+  }
+
+  const clampedCurrent = Math.max(0, Math.min(points.length - 1, currentIndex));
+  const current = displayPoints[clampedCurrent] ?? displayPoints[0];
+  const currentTs = points[clampedCurrent]?.timestampMs;
+  if (!Number.isFinite(currentTs)) {
+    const fallback = displayPoints[Math.min(displayPoints.length - 1, clampedCurrent + 1)] ?? current;
+    return { lon: fallback.lon, lat: fallback.lat };
+  }
+
+  const targetTs = currentTs + Math.max(0, lookAheadMs);
+  let upper = clampedCurrent + 1;
+  while (upper < points.length) {
+    const ts = points[upper]?.timestampMs;
+    if (!Number.isFinite(ts) || ts >= targetTs) {
+      break;
+    }
+    upper += 1;
+  }
+
+  if (upper >= points.length) {
+    const last = displayPoints[displayPoints.length - 1] ?? current;
+    return { lon: last.lon, lat: last.lat };
+  }
+
+  const lower = Math.max(clampedCurrent, upper - 1);
+  const lowerPoint = displayPoints[lower] ?? current;
+  const upperPoint = displayPoints[upper] ?? lowerPoint;
+  const lowerTs = points[lower]?.timestampMs;
+  const upperTs = points[upper]?.timestampMs;
+
+  if (!Number.isFinite(lowerTs) || !Number.isFinite(upperTs) || upperTs <= lowerTs) {
+    return { lon: upperPoint.lon, lat: upperPoint.lat };
+  }
+
+  const alpha = clamp((targetTs - lowerTs) / (upperTs - lowerTs), 0, 1);
+  return {
+    lon: lowerPoint.lon + (upperPoint.lon - lowerPoint.lon) * alpha,
+    lat: lowerPoint.lat + (upperPoint.lat - lowerPoint.lat) * alpha
+  };
+}
 
 function ensureLayers(map: maplibregl.Map) {
   if (!map.getSource(SOURCE_SMOOTH)) {
@@ -149,6 +277,8 @@ export function Viewer2D({
   selectedIndex,
   currentIndex,
   isPlaying,
+  autoFollowMode,
+  frontFollowMode,
   mapProvider,
   mapStyle,
   pointSize,
@@ -161,6 +291,26 @@ export function Viewer2D({
   const smoothedTrackRef = useRef(smoothedTrack);
   const pointFeaturesRef = useRef<Array<Record<string, unknown>>>([]);
   const pointSizeRef = useRef(pointSize);
+  const manualFollowUntilRef = useRef(0);
+  const lookAheadMsRef = useRef(FOLLOW_LOOK_AHEAD_DEFAULT_MS);
+  const followTargetRef = useRef<{
+    trackPosition: boolean;
+    trackZoom: boolean;
+    trackHeading: boolean;
+    lon: number;
+    lat: number;
+    zoom: number;
+    bearing: number;
+    speedMps: number;
+    turnRateDegPerSec: number;
+  } | null>(null);
+  const followRafRef = useRef<number | null>(null);
+  const followLastTickRef = useRef(0);
+  const followStateRef = useRef<{ lon: number; lat: number; zoom: number; bearing: number } | null>(null);
+
+  useEffect(() => {
+    lookAheadMsRef.current = FOLLOW_LOOK_AHEAD_DEFAULT_MS;
+  }, [points.length, mapProvider]);
 
   const syncMapVisuals = (map: maplibregl.Map) => {
     if (!map || !map.getStyle()) {
@@ -253,6 +403,66 @@ export function Viewer2D({
       };
     });
   }, [points, mapProvider]);
+
+  const followSnapshot = useMemo<FollowSnapshot2D | null>(() => {
+    if (displayPoints.length === 0 || points.length === 0) {
+      return null;
+    }
+
+    const index = Math.max(0, Math.min(points.length - 1, currentIndex));
+    const current = displayPoints[index];
+    if (!current) {
+      return null;
+    }
+
+    let speedMps = 0;
+    const speedKmh = points[index]?.speedKmh;
+    if (typeof speedKmh === "number" && Number.isFinite(speedKmh)) {
+      speedMps = Math.max(0, speedKmh / 3.6);
+    } else if (index > 0 && displayPoints[index - 1]) {
+      const previous = displayPoints[index - 1];
+      const deltaMs = points[index].timestampMs - points[index - 1].timestampMs;
+      const distance = measureOffsetMeters(previous, current).distance;
+      if (deltaMs > 0 && Number.isFinite(distance)) {
+        speedMps = Math.max(0, distance / (deltaMs / 1000));
+      }
+    }
+
+    let turnRateDegPerSec = 0;
+    if (index > 2) {
+      const prevAIndex = Math.max(0, index - 4);
+      const prevBIndex = Math.max(0, index - 2);
+      const prevA = displayPoints[prevAIndex];
+      const prevB = displayPoints[prevBIndex];
+      if (prevA && prevB) {
+        const previousHeading = deriveHeadingDeg(prevA, prevB);
+        const currentHeading = deriveHeadingDeg(prevB, current);
+        const dtMs = points[index].timestampMs - points[prevBIndex].timestampMs;
+        if (previousHeading !== null && currentHeading !== null && dtMs > 0) {
+          turnRateDegPerSec = Math.abs(bearingDiffDeg(currentHeading, previousHeading)) / (dtMs / 1000);
+        }
+      }
+    }
+
+    const rawLookAheadMs = computeDynamicLookAheadMs(speedMps, turnRateDegPerSec);
+    const lookAheadMs = smoothLookAheadMs(lookAheadMsRef.current, rawLookAheadMs);
+    lookAheadMsRef.current = lookAheadMs;
+    const lead = resolveInterpolatedLeadCoord(displayPoints, points, index, lookAheadMs);
+
+    let headingDeg = deriveHeadingDeg(current, lead);
+    if (headingDeg === null && index > 0 && displayPoints[index - 1]) {
+      headingDeg = deriveHeadingDeg(displayPoints[index - 1], current);
+    }
+
+    return {
+      current,
+      lead,
+      headingDeg,
+      speedMps,
+      turnRateDegPerSec,
+      lookAheadMs
+    };
+  }, [displayPoints, points, currentIndex]);
 
   const displaySmoothedTrack = useMemo<[number, number][]>(() => {
     const trailRange = resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS);
@@ -383,6 +593,7 @@ export function Viewer2D({
 
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
     mapRef.current = map;
+    let cleanupManualFollow: (() => void) | null = null;
 
     const clickableLayers = [LAYER_MIDDLE, LAYER_START, LAYER_END, LAYER_CURRENT, LAYER_SELECTED];
 
@@ -413,12 +624,28 @@ export function Viewer2D({
         });
       });
 
+      const markManualFollow = () => {
+        manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+      };
+      map.on("dragstart", markManualFollow);
+      const canvas = map.getCanvas();
+      const onCanvasWheel = () => markManualFollow();
+      const onCanvasPointerDown = () => markManualFollow();
+      canvas.addEventListener("wheel", onCanvasWheel, { passive: true });
+      canvas.addEventListener("pointerdown", onCanvasPointerDown, { passive: true });
+      cleanupManualFollow = () => {
+        map.off("dragstart", markManualFollow);
+        canvas.removeEventListener("wheel", onCanvasWheel);
+        canvas.removeEventListener("pointerdown", onCanvasPointerDown);
+      };
+
       if (displayPoints.length > 0) {
         fitMapToTrack(map, displayPoints);
       }
     });
 
     return () => {
+      cleanupManualFollow?.();
       map.remove();
       mapRef.current = null;
     };
@@ -434,6 +661,202 @@ export function Viewer2D({
     map.once("idle", () => syncMapVisuals(map));
     fitMapToTrack(map, displayPoints);
   }, [displayPoints, points.length, mapProvider, mapStyle]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !followSnapshot) {
+      return;
+    }
+    if (!map.getStyle()) {
+      return;
+    }
+
+    const shouldTrackPosition = isPlaying && (autoFollowMode || frontFollowMode);
+    const shouldTrackZoom = isPlaying && autoFollowMode;
+    const shouldTrackHeading = isPlaying && frontFollowMode;
+
+    if (!shouldTrackPosition && !shouldTrackZoom && !shouldTrackHeading) {
+      followTargetRef.current = null;
+      followStateRef.current = null;
+      followLastTickRef.current = 0;
+      return;
+    }
+
+    const speedFactor = clamp(followSnapshot.speedMps / 34, 0, 1);
+    const turnFactor = clamp(followSnapshot.turnRateDegPerSec / 75, 0, 1);
+    const zoomNow = map.getZoom();
+
+    const leadFactor = shouldTrackPosition ? clamp(0.16 + speedFactor * 0.3, 0.16, 0.48) : 0;
+    const targetLon =
+      followSnapshot.current.lon + (followSnapshot.lead.lon - followSnapshot.current.lon) * leadFactor;
+    const targetLat =
+      followSnapshot.current.lat + (followSnapshot.lead.lat - followSnapshot.current.lat) * leadFactor;
+
+    let targetZoom = zoomNow;
+    if (shouldTrackZoom) {
+      targetZoom = clamp(17.05 - speedFactor * 1.25 - turnFactor * 0.72, 13.4, 18.05);
+    }
+
+    const previousTarget = followTargetRef.current;
+    let targetBearingRaw =
+      shouldTrackHeading && followSnapshot.headingDeg !== null
+        ? followSnapshot.headingDeg
+        : normalizeBearingDeg(map.getBearing());
+    if (previousTarget && shouldTrackHeading) {
+      const blend = clamp(0.2 + turnFactor * 0.32, 0.2, 0.52);
+      targetBearingRaw = normalizeBearingDeg(
+        previousTarget.bearing + bearingDiffDeg(targetBearingRaw, previousTarget.bearing) * blend
+      );
+    }
+
+    const targetBearing = targetBearingRaw;
+
+    followTargetRef.current = {
+      trackPosition: shouldTrackPosition,
+      trackZoom: shouldTrackZoom,
+      trackHeading: shouldTrackHeading,
+      lon: targetLon,
+      lat: targetLat,
+      zoom: targetZoom,
+      bearing: targetBearing,
+      speedMps: followSnapshot.speedMps,
+      turnRateDegPerSec: followSnapshot.turnRateDegPerSec
+    };
+  }, [followSnapshot, isPlaying, autoFollowMode, frontFollowMode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+
+    const shouldAnimate = isPlaying && (autoFollowMode || frontFollowMode);
+    if (!shouldAnimate) {
+      if (followRafRef.current !== null) {
+        cancelAnimationFrame(followRafRef.current);
+        followRafRef.current = null;
+      }
+      followLastTickRef.current = 0;
+      followStateRef.current = null;
+      return;
+    }
+
+    let disposed = false;
+    const tick = () => {
+      if (disposed) {
+        return;
+      }
+
+      const target = followTargetRef.current;
+      if (!target) {
+        followRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const now = performance.now();
+      const dtSec =
+        followLastTickRef.current > 0
+          ? Math.max(1 / 120, (now - followLastTickRef.current) / 1000)
+          : 1 / 60;
+      followLastTickRef.current = now;
+
+      if (now < manualFollowUntilRef.current) {
+        followRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      const centerNow = map.getCenter();
+      const zoomNow = map.getZoom();
+      const bearingNow = normalizeBearingDeg(map.getBearing());
+
+      const smoothState = followStateRef.current ?? {
+        lon: centerNow.lng,
+        lat: centerNow.lat,
+        zoom: zoomNow,
+        bearing: bearingNow
+      };
+      const speedFactor = clamp(target.speedMps / 34, 0, 1);
+      const turnFactor = clamp(target.turnRateDegPerSec / 75, 0, 1);
+      const agitation = clamp(speedFactor * 0.32 + turnFactor * 0.78, 0, 1);
+
+      if (target.trackPosition) {
+        const centerAlpha = 1 - Math.exp(-dtSec * (2.9 + agitation * 2.2));
+        smoothState.lon += (target.lon - smoothState.lon) * centerAlpha;
+        smoothState.lat += (target.lat - smoothState.lat) * centerAlpha;
+      } else {
+        smoothState.lon = centerNow.lng;
+        smoothState.lat = centerNow.lat;
+      }
+
+      if (target.trackZoom) {
+        const zoomDelta = target.zoom - smoothState.zoom;
+        if (Math.abs(zoomDelta) > 0.002) {
+          const zoomingOut = zoomDelta < 0;
+          const zoomRate = zoomingOut
+            ? 1.7 + agitation * 1.25
+            : 0.75 + agitation * 0.55;
+          const zoomAlpha = 1 - Math.exp(-dtSec * zoomRate);
+          smoothState.zoom += zoomDelta * zoomAlpha;
+        }
+      } else {
+        smoothState.zoom = zoomNow;
+      }
+
+      const headingActive = target.trackHeading && (target.speedMps > 1.8 || target.turnRateDegPerSec > 10);
+      if (headingActive) {
+        const bearingDelta = bearingDiffDeg(target.bearing, smoothState.bearing);
+        const deadband = 1.5 + (1 - agitation) * 1.2;
+        if (Math.abs(bearingDelta) > deadband) {
+          const maxStep = (24 + target.turnRateDegPerSec * 0.35) * dtSec;
+          const step = clamp(
+            bearingDelta * (1 - Math.exp(-dtSec * (2.3 + agitation * 3.1))),
+            -maxStep,
+            maxStep
+          );
+          smoothState.bearing = normalizeBearingDeg(smoothState.bearing + step);
+        }
+      } else {
+        smoothState.bearing = bearingNow;
+      }
+
+      followStateRef.current = smoothState;
+
+      const centerOffset = measureOffsetMeters(
+        { lon: centerNow.lng, lat: centerNow.lat },
+        { lon: smoothState.lon, lat: smoothState.lat }
+      );
+      const needCenterUpdate = target.trackPosition && centerOffset.distance > 0.2;
+      const needZoomUpdate = target.trackZoom && Math.abs(smoothState.zoom - zoomNow) > 0.004;
+      const needBearingUpdate =
+        target.trackHeading && Math.abs(bearingDiffDeg(smoothState.bearing, bearingNow)) > 0.16;
+
+      if (needCenterUpdate || needZoomUpdate || needBearingUpdate) {
+        map.jumpTo({
+          center: needCenterUpdate ? [smoothState.lon, smoothState.lat] : [centerNow.lng, centerNow.lat],
+          zoom: needZoomUpdate ? smoothState.zoom : zoomNow,
+          bearing: needBearingUpdate ? smoothState.bearing : bearingNow
+        });
+      }
+
+      followRafRef.current = requestAnimationFrame(tick);
+    };
+
+    if (followRafRef.current !== null) {
+      cancelAnimationFrame(followRafRef.current);
+      followRafRef.current = null;
+    }
+    followLastTickRef.current = 0;
+    followRafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      disposed = true;
+      if (followRafRef.current !== null) {
+        cancelAnimationFrame(followRafRef.current);
+        followRafRef.current = null;
+      }
+      followLastTickRef.current = 0;
+    };
+  }, [isPlaying, autoFollowMode, frontFollowMode, points.length, mapProvider, mapStyle]);
 
   return <div className="viewer-canvas" ref={containerRef} />;
 }

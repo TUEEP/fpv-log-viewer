@@ -28,6 +28,8 @@ export default function App() {
   const pointSize = useViewerStore((state) => state.pointSize);
   const pointStride = useViewerStore((state) => state.pointStride);
   const zScale = useViewerStore((state) => state.zScale);
+  const autoFollowMode = useViewerStore((state) => state.autoFollowMode);
+  const frontFollowMode = useViewerStore((state) => state.frontFollowMode);
   const isFullscreen = useViewerStore((state) => state.isFullscreen);
 
   const setData = useViewerStore((state) => state.setData);
@@ -45,6 +47,8 @@ export default function App() {
   const setPointSize = useViewerStore((state) => state.setPointSize);
   const setPointStride = useViewerStore((state) => state.setPointStride);
   const setZScale = useViewerStore((state) => state.setZScale);
+  const setAutoFollowMode = useViewerStore((state) => state.setAutoFollowMode);
+  const setFrontFollowMode = useViewerStore((state) => state.setFrontFollowMode);
   const setIsFullscreen = useViewerStore((state) => state.setIsFullscreen);
 
   const smoothedTrack = useMemo(() => buildSmoothedTrack(points, 0.2, 10), [points]);
@@ -150,6 +154,10 @@ export default function App() {
         setPointStride={setPointStride}
         zScale={zScale}
         setZScale={setZScale}
+        autoFollowMode={autoFollowMode}
+        setAutoFollowMode={setAutoFollowMode}
+        frontFollowMode={frontFollowMode}
+        setFrontFollowMode={setFrontFollowMode}
         isFullscreen={isFullscreen}
         onToggleFullscreen={handleToggleFullscreen}
       />
@@ -163,6 +171,8 @@ export default function App() {
               selectedIndex={selectedIndex}
               currentIndex={playback.currentIndex}
               isPlaying={playback.isPlaying}
+              autoFollowMode={autoFollowMode}
+              frontFollowMode={frontFollowMode}
               mapProvider={mapProvider}
               mapStyle={mapStyle}
               pointSize={pointSize}
@@ -179,6 +189,8 @@ export default function App() {
               selectedIndex={selectedIndex}
               currentIndex={playback.currentIndex}
               isPlaying={playback.isPlaying}
+              autoFollowMode={autoFollowMode}
+              frontFollowMode={frontFollowMode}
               pointSize={pointSize}
               pointStride={pointStride}
               onSelect={handlePointSelect}

@@ -45,6 +45,8 @@ interface ViewerState {
   pointSize: number;
   pointStride: number;
   zScale: number;
+  autoFollowMode: boolean;
+  frontFollowMode: boolean;
   isFullscreen: boolean;
   playbackCarryMs: number;
   setData: (payload: { headers: string[]; points: FlightPoint[]; errors: string[] }) => void;
@@ -64,6 +66,8 @@ interface ViewerState {
   setPointSize: (size: number) => void;
   setPointStride: (stride: number) => void;
   setZScale: (scale: number) => void;
+  setAutoFollowMode: (enabled: boolean) => void;
+  setFrontFollowMode: (enabled: boolean) => void;
   setIsFullscreen: (value: boolean) => void;
 }
 
@@ -86,6 +90,8 @@ export const useViewerStore = create<ViewerState>((set) => ({
   pointSize: 1,
   pointStride: 1,
   zScale: 5,
+  autoFollowMode: false,
+  frontFollowMode: false,
   isFullscreen: false,
   playbackCarryMs: 0,
 
@@ -201,6 +207,8 @@ export const useViewerStore = create<ViewerState>((set) => ({
   setPointSize: (size) => set(() => ({ pointSize: Math.max(0.4, Math.min(3, size)) })),
   setPointStride: (stride) => set(() => ({ pointStride: Math.max(1, Math.min(10, stride)) })),
   setZScale: (scale) => set(() => ({ zScale: Math.max(0.5, Math.min(20, scale)) })),
+  setAutoFollowMode: (enabled) => set(() => ({ autoFollowMode: enabled })),
+  setFrontFollowMode: (enabled) => set(() => ({ frontFollowMode: enabled })),
   setIsFullscreen: (value) => set(() => ({ isFullscreen: value }))
 }));
 

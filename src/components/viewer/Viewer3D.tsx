@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
@@ -18,6 +18,8 @@ interface Viewer3DProps {
   selectedIndex: number;
   currentIndex: number;
   isPlaying: boolean;
+  autoFollowMode: boolean;
+  frontFollowMode: boolean;
   pointSize: number;
   pointStride: number;
   onSelect: (index: number) => void;
@@ -82,6 +84,15 @@ interface SceneData {
 
 type CameraPreset = "perspective" | "top" | "side";
 
+interface FollowSnapshot3D {
+  current: [number, number, number];
+  lead: [number, number, number];
+  speedMps: number;
+  verticalSpeedMps: number;
+  turnRateDegPerSec: number;
+  lookAheadMs: number;
+}
+
 const EARTH_RADIUS_M = 6378137;
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -97,6 +108,10 @@ const FOG_COLOR = SKY_HORIZON_COLOR;
 const GROUND_HAZE_INNER_COLOR = "#4b6477";
 const GROUND_HAZE_OUTER_COLOR = "#7f99ac";
 const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
+const FOLLOW_LOOK_AHEAD_DEFAULT_MS = 1400;
+const FOLLOW_LOOK_AHEAD_MIN_MS = 700;
+const FOLLOW_LOOK_AHEAD_MAX_MS = 3200;
+const FOLLOW_MANUAL_HOLD_MS = 3000;
 
 const SKY_VERTEX_SHADER = `
 varying float vHeight;
@@ -215,6 +230,102 @@ function preloadTileTextures(urls: string[]): Promise<void> {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeAngleDeg(value: number): number {
+  let normalized = value % 360;
+  if (normalized > 180) {
+    normalized -= 360;
+  }
+  if (normalized <= -180) {
+    normalized += 360;
+  }
+  return normalized;
+}
+
+function angleDiffDeg(target: number, source: number): number {
+  return normalizeAngleDeg(target - source);
+}
+
+function deriveHeadingDeg(from: LocalTrackPoint, to: LocalTrackPoint): number | null {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.hypot(dx, dy) < 0.8) {
+    return null;
+  }
+  return normalizeAngleDeg((Math.atan2(dx, dy) * 180) / Math.PI);
+}
+
+function computeDynamicLookAheadMs(
+  speedMps: number,
+  turnRateDegPerSec: number,
+  verticalSpeedMps: number
+): number {
+  const baseMs = 900;
+  const speedBoostMs = clamp(speedMps, 0, 42) * 60;
+  const turnPenalty = 1 - clamp((turnRateDegPerSec - 8) / 40, 0, 1) * 0.5;
+  const verticalPenalty = 1 - clamp((Math.abs(verticalSpeedMps) - 1.2) / 6, 0, 1) * 0.25;
+  const lookAheadMs = (baseMs + speedBoostMs) * turnPenalty * verticalPenalty;
+  return clamp(lookAheadMs, FOLLOW_LOOK_AHEAD_MIN_MS, FOLLOW_LOOK_AHEAD_MAX_MS);
+}
+
+function smoothLookAheadMs(previousMs: number, nextMs: number): number {
+  if (!Number.isFinite(previousMs) || previousMs <= 0) {
+    return nextMs;
+  }
+  const alpha = nextMs < previousMs ? 0.36 : 0.2;
+  return previousMs + (nextMs - previousMs) * alpha;
+}
+
+function resolveInterpolatedLeadLocalPoint(
+  localTrackPoints: LocalTrackPoint[],
+  points: FlightPoint[],
+  currentIndex: number,
+  lookAheadMs: number
+): LocalTrackPoint {
+  const clampedCurrent = Math.max(0, Math.min(points.length - 1, currentIndex));
+  const current = localTrackPoints[clampedCurrent] ?? {
+    index: clampedCurrent,
+    x: 0,
+    y: 0,
+    z: 0
+  };
+  const currentTs = points[clampedCurrent]?.timestampMs;
+  if (!Number.isFinite(currentTs)) {
+    return localTrackPoints[Math.min(localTrackPoints.length - 1, clampedCurrent + 1)] ?? current;
+  }
+
+  const targetTs = currentTs + Math.max(0, lookAheadMs);
+  let upper = clampedCurrent + 1;
+  while (upper < points.length) {
+    const ts = points[upper]?.timestampMs;
+    if (!Number.isFinite(ts) || ts >= targetTs) {
+      break;
+    }
+    upper += 1;
+  }
+
+  if (upper >= points.length) {
+    return localTrackPoints[localTrackPoints.length - 1] ?? current;
+  }
+
+  const lower = Math.max(clampedCurrent, upper - 1);
+  const lowerPoint = localTrackPoints[lower] ?? current;
+  const upperPoint = localTrackPoints[upper] ?? lowerPoint;
+  const lowerTs = points[lower]?.timestampMs;
+  const upperTs = points[upper]?.timestampMs;
+
+  if (!Number.isFinite(lowerTs) || !Number.isFinite(upperTs) || upperTs <= lowerTs) {
+    return upperPoint;
+  }
+
+  const alpha = clamp((targetTs - lowerTs) / (upperTs - lowerTs), 0, 1);
+  return {
+    index: lower,
+    x: lowerPoint.x + (upperPoint.x - lowerPoint.x) * alpha,
+    y: lowerPoint.y + (upperPoint.y - lowerPoint.y) * alpha,
+    z: lowerPoint.z + (upperPoint.z - lowerPoint.z) * alpha
+  };
 }
 
 function projectToLocal(
@@ -585,6 +696,150 @@ function RasterTile({ tile }: { tile: TilePlaneData }) {
   );
 }
 
+function AutoFollowRig({
+  controlsRef,
+  followSnapshot,
+  isPlaying,
+  autoFollowMode,
+  frontFollowMode,
+  xySpan,
+  manualFollowUntilRef
+}: {
+  controlsRef: MutableRefObject<OrbitControlsImpl | null>;
+  followSnapshot: FollowSnapshot3D | null;
+  isPlaying: boolean;
+  autoFollowMode: boolean;
+  frontFollowMode: boolean;
+  xySpan: number;
+  manualFollowUntilRef: MutableRefObject<number>;
+}) {
+  const initializedRef = useRef(false);
+  const cameraOffsetRef = useRef(new THREE.Vector3(160, -150, 100));
+  const smoothedForwardRef = useRef(new THREE.Vector3(0, 1, 0));
+  const currentRef = useRef(new THREE.Vector3());
+  const leadRef = useRef(new THREE.Vector3());
+  const desiredForwardRef = useRef(new THREE.Vector3());
+  const desiredPositionRef = useRef(new THREE.Vector3());
+  const desiredTargetRef = useRef(new THREE.Vector3());
+  const chasePositionRef = useRef(new THREE.Vector3());
+  const topPositionRef = useRef(new THREE.Vector3());
+  const chaseTargetRef = useRef(new THREE.Vector3());
+  const topTargetRef = useRef(new THREE.Vector3());
+  const rightRef = useRef(new THREE.Vector3());
+  const up = useMemo(() => new THREE.Vector3(0, 0, 1), []);
+
+  useEffect(() => {
+    if (!isPlaying || (!autoFollowMode && !frontFollowMode) || !followSnapshot) {
+      initializedRef.current = false;
+    }
+  }, [isPlaying, autoFollowMode, frontFollowMode, followSnapshot]);
+
+  useFrame((state, delta) => {
+    const controls = controlsRef.current;
+    if (!controls || !followSnapshot) {
+      return;
+    }
+
+    const shouldTrack = isPlaying && (autoFollowMode || frontFollowMode);
+    if (!shouldTrack) {
+      return;
+    }
+
+    if (performance.now() < manualFollowUntilRef.current) {
+      return;
+    }
+
+    const camera = state.camera as THREE.PerspectiveCamera;
+    currentRef.current.set(...followSnapshot.current);
+    leadRef.current.set(...followSnapshot.lead);
+    desiredForwardRef.current.copy(leadRef.current).sub(currentRef.current);
+    if (desiredForwardRef.current.lengthSq() < 1e-6) {
+      return;
+    }
+    desiredForwardRef.current.normalize();
+
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      smoothedForwardRef.current.copy(desiredForwardRef.current);
+      cameraOffsetRef.current.copy(camera.position).sub(controls.target);
+      if (cameraOffsetRef.current.lengthSq() < 1) {
+        cameraOffsetRef.current.set(160, -150, 100);
+      }
+    }
+
+    const speed = followSnapshot.speedMps;
+    const turn = followSnapshot.turnRateDegPerSec;
+    const vertical = Math.abs(followSnapshot.verticalSpeedMps);
+    const speedFactor = clamp(speed / 34, 0, 1);
+    const turnFactor = clamp(turn / 70, 0, 1);
+    const verticalFactor = clamp(vertical / 9, 0, 1);
+    const agitation = clamp(speedFactor * 0.22 + turnFactor * 0.72 + verticalFactor * 0.38, 0, 1);
+
+    const dirAngle = smoothedForwardRef.current.angleTo(desiredForwardRef.current);
+    const dirDeadZone = THREE.MathUtils.degToRad(1.3 + (1 - agitation) * 1.2);
+    if (dirAngle > dirDeadZone) {
+      const dirAlpha = 1 - Math.exp(-delta * (2.2 + agitation * 3.1));
+      smoothedForwardRef.current.lerp(desiredForwardRef.current, dirAlpha).normalize();
+    }
+
+    const dynamicDistance = clamp(155 + speed * 4.8 + turn * 1.15, 155, Math.max(560, xySpan * 4.8));
+    const dynamicHeight = clamp(52 + speed * 2.15 + vertical * 5.4, 48, Math.max(260, xySpan * 2.05));
+    const fixedDistance = clamp(Math.max(170, xySpan * 1.28), 170, Math.max(520, xySpan * 4.3));
+    const fixedHeight = clamp(Math.max(52, xySpan * 0.4), 50, Math.max(220, xySpan * 1.85));
+    const followDistance = autoFollowMode ? dynamicDistance : fixedDistance;
+    const followHeight = autoFollowMode ? dynamicHeight : fixedHeight;
+    const stableTurn = clamp(1 - turn / 16, 0, 1);
+    const stableVertical = clamp(1 - vertical / 3.4, 0, 1);
+    const stableSpeed = clamp((speed - 4.5) / 10, 0, 1);
+    const topBlend = autoFollowMode && !frontFollowMode ? stableTurn * stableVertical * stableSpeed : 0;
+
+    rightRef.current.crossVectors(smoothedForwardRef.current, up);
+    if (rightRef.current.lengthSq() < 1e-6) {
+      rightRef.current.set(1, 0, 0);
+    } else {
+      rightRef.current.normalize();
+    }
+
+    if (frontFollowMode) {
+      desiredTargetRef.current
+        .copy(currentRef.current)
+        .addScaledVector(smoothedForwardRef.current, Math.max(18, followDistance * 0.26));
+      desiredPositionRef.current
+        .copy(currentRef.current)
+        .addScaledVector(smoothedForwardRef.current, -followDistance)
+        .addScaledVector(up, followHeight)
+        .addScaledVector(rightRef.current, followDistance * 0.06);
+    } else {
+      chasePositionRef.current
+        .copy(currentRef.current)
+        .addScaledVector(smoothedForwardRef.current, -followDistance * 0.72)
+        .addScaledVector(up, followHeight)
+        .addScaledVector(rightRef.current, followDistance * 0.05);
+      topPositionRef.current
+        .copy(currentRef.current)
+        .addScaledVector(up, followHeight * 1.95 + followDistance * 0.42)
+        .addScaledVector(rightRef.current, followDistance * 0.02);
+
+      desiredPositionRef.current.copy(chasePositionRef.current).lerp(topPositionRef.current, topBlend);
+
+      chaseTargetRef.current
+        .copy(currentRef.current)
+        .addScaledVector(smoothedForwardRef.current, followDistance * 0.12);
+      topTargetRef.current.copy(currentRef.current).addScaledVector(up, Math.min(14, followHeight * 0.09));
+      desiredTargetRef.current.copy(chaseTargetRef.current).lerp(topTargetRef.current, topBlend);
+    }
+
+    const positionAlpha = 1 - Math.exp(-delta * (1.7 + agitation * 2.1));
+    const targetAlpha = 1 - Math.exp(-delta * (frontFollowMode ? 2.1 + agitation * 2 : 1.5 + agitation * 1.6));
+    camera.position.lerp(desiredPositionRef.current, positionAlpha);
+    controls.target.lerp(desiredTargetRef.current, targetAlpha);
+    controls.update();
+    cameraOffsetRef.current.copy(camera.position).sub(controls.target);
+  });
+
+  return null;
+}
+
 export function Viewer3D({
   points,
   altitudeMode,
@@ -594,14 +849,19 @@ export function Viewer3D({
   selectedIndex,
   currentIndex,
   isPlaying,
+  autoFollowMode,
+  frontFollowMode,
   pointSize,
   pointStride,
   onSelect
 }: Viewer3DProps) {
   const { t } = useTranslation();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
+  const manualFollowUntilRef = useRef(0);
+  const lookAheadMsRef = useRef(FOLLOW_LOOK_AHEAD_DEFAULT_MS);
   const tileTransitionJobRef = useRef(0);
   const prevRenderedTileZoomRef = useRef<number | null>(null);
+  const lastTileViewportUpdateMsRef = useRef(0);
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("perspective");
   const [tileViewport, setTileViewport] = useState<TileViewport>({
     centerX: 0,
@@ -611,6 +871,10 @@ export function Viewer3D({
   });
   const [renderTilePlanes, setRenderTilePlanes] = useState<TilePlaneData[]>([]);
   const renderTilePlanesRef = useRef<TilePlaneData[]>([]);
+
+  useEffect(() => {
+    lookAheadMsRef.current = FOLLOW_LOOK_AHEAD_DEFAULT_MS;
+  }, [points.length, mapProvider, altitudeMode, zScale]);
 
   const displayGeoPoints = useMemo<DisplayGeoPoint[]>(() => {
     return points.map((point) => {
@@ -701,6 +965,71 @@ export function Viewer3D({
     displayGeoPoints,
     zScale
   ]);
+
+  const followSnapshot = useMemo<FollowSnapshot3D | null>(() => {
+    const localTrackPoints = sceneData.localTrackPoints;
+    if (localTrackPoints.length === 0 || points.length === 0) {
+      return null;
+    }
+
+    const index = Math.max(0, Math.min(points.length - 1, currentIndex));
+    const current = localTrackPoints[index];
+    if (!current) {
+      return null;
+    }
+
+    let speedMps = 0;
+    const speedKmh = points[index]?.speedKmh;
+    if (typeof speedKmh === "number" && Number.isFinite(speedKmh)) {
+      speedMps = Math.max(0, speedKmh / 3.6);
+    } else if (index > 0 && localTrackPoints[index - 1]) {
+      const previous = localTrackPoints[index - 1];
+      const dtMs = points[index].timestampMs - points[index - 1].timestampMs;
+      const distance = Math.hypot(current.x - previous.x, current.y - previous.y);
+      if (dtMs > 0 && Number.isFinite(distance)) {
+        speedMps = Math.max(0, distance / (dtMs / 1000));
+      }
+    }
+
+    let verticalSpeedMps = 0;
+    if (index > 0 && localTrackPoints[index - 1]) {
+      const previous = localTrackPoints[index - 1];
+      const dtMs = points[index].timestampMs - points[index - 1].timestampMs;
+      if (dtMs > 0) {
+        verticalSpeedMps = (current.z - previous.z) / (dtMs / 1000);
+      }
+    }
+
+    let turnRateDegPerSec = 0;
+    if (index > 2) {
+      const prevAIndex = Math.max(0, index - 4);
+      const prevBIndex = Math.max(0, index - 2);
+      const prevA = localTrackPoints[prevAIndex];
+      const prevB = localTrackPoints[prevBIndex];
+      if (prevA && prevB) {
+        const previousHeading = deriveHeadingDeg(prevA, prevB);
+        const currentHeading = deriveHeadingDeg(prevB, current);
+        const dtMs = points[index].timestampMs - points[prevBIndex].timestampMs;
+        if (previousHeading !== null && currentHeading !== null && dtMs > 0) {
+          turnRateDegPerSec = Math.abs(angleDiffDeg(currentHeading, previousHeading)) / (dtMs / 1000);
+        }
+      }
+    }
+
+    const rawLookAheadMs = computeDynamicLookAheadMs(speedMps, turnRateDegPerSec, verticalSpeedMps);
+    const lookAheadMs = smoothLookAheadMs(lookAheadMsRef.current, rawLookAheadMs);
+    lookAheadMsRef.current = lookAheadMs;
+    const lead = resolveInterpolatedLeadLocalPoint(localTrackPoints, points, index, lookAheadMs);
+
+    return {
+      current: [current.x, current.y, current.z],
+      lead: [lead.x, lead.y, lead.z],
+      speedMps,
+      verticalSpeedMps,
+      turnRateDegPerSec,
+      lookAheadMs
+    };
+  }, [sceneData.localTrackPoints, points, currentIndex]);
 
   const markers = useMemo<MarkerData[]>(() => {
     if (sceneData.localTrackPoints.length === 0) {
@@ -882,9 +1211,13 @@ export function Viewer3D({
   }, [renderTilePlanes]);
 
   useEffect(() => {
-    if (tilePlanes.length === 0) {
+    if (!sceneData.hasProjection) {
       setRenderTilePlanes([]);
       prevRenderedTileZoomRef.current = null;
+      return;
+    }
+    if (tilePlanes.length === 0) {
+      // Keep existing tiles visible to avoid flicker when next viewport resolves to no tiles temporarily.
       return;
     }
 
@@ -912,7 +1245,8 @@ export function Viewer3D({
         const merged = new Map<string, TilePlaneData>();
         overlap.forEach((tile) => merged.set(tile.key, tile));
         loadedInTarget.forEach((tile) => merged.set(tile.key, tile));
-        return Array.from(merged.values());
+        const next = Array.from(merged.values());
+        return next.length > 0 ? next : previous;
       });
     }
 
@@ -922,7 +1256,7 @@ export function Viewer3D({
       }
       setRenderTilePlanes(tilePlanes);
     });
-  }, [tilePlanes, tileViewport.token]);
+  }, [tilePlanes, tileViewport.token, sceneData.hasProjection]);
 
   const horizonVisual = useMemo(() => {
     const coverage = Math.max(tileViewport.coverageMeters, 2500);
@@ -953,17 +1287,22 @@ export function Viewer3D({
     const target = controls.target;
     const nextCoverage = pickDynamicCoverageMeters(camera.position.distanceTo(target), sceneData.xySpan);
     const nextToken = buildViewToken(target.x, target.y, nextCoverage);
+    const now = performance.now();
 
     setTileViewport((prev) => {
       const baseCoverage = Math.max(prev.coverageMeters, 1);
       const shift = Math.hypot(prev.centerX - target.x, prev.centerY - target.y);
       const coverageRatio = Math.abs(prev.coverageMeters - nextCoverage) / baseCoverage;
-      if (shift < baseCoverage * 0.2 && coverageRatio < 0.22) {
+      const quietMove = shift < baseCoverage * 0.08 && coverageRatio < 0.08;
+      const recentlyUpdated = now - lastTileViewportUpdateMsRef.current < 140;
+      const mediumMove = shift < baseCoverage * 0.16 && coverageRatio < 0.16;
+      if (quietMove || (recentlyUpdated && mediumMove)) {
         return prev;
       }
       if (prev.token === nextToken) {
         return prev;
       }
+      lastTileViewportUpdateMsRef.current = now;
       return {
         centerX: target.x,
         centerY: target.y,
@@ -972,6 +1311,10 @@ export function Viewer3D({
       };
     });
   }, [sceneData.hasProjection, sceneData.xySpan]);
+
+  const handleControlsStart = useCallback(() => {
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+  }, []);
 
   const applyCameraPreset = useCallback(
     (preset: CameraPreset) => {
@@ -1067,6 +1410,16 @@ export function Viewer3D({
           </lineSegments>
         ) : null}
 
+        <AutoFollowRig
+          controlsRef={controlsRef}
+          followSnapshot={followSnapshot}
+          isPlaying={isPlaying}
+          autoFollowMode={autoFollowMode}
+          frontFollowMode={frontFollowMode}
+          xySpan={sceneData.xySpan}
+          manualFollowUntilRef={manualFollowUntilRef}
+        />
+
         {markers.map((marker) => (
           <mesh
             key={marker.index}
@@ -1098,6 +1451,7 @@ export function Viewer3D({
           minDistance={10}
           maxDistance={Math.max(900, sceneData.xySpan * 12)}
           onChange={syncTileViewportFromControls}
+          onStart={handleControlsStart}
         />
       </Canvas>
 
