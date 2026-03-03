@@ -1,3 +1,8 @@
+import {
+  Box,
+  Paper,
+  Typography
+} from "@mui/material";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { formatPointForPanel } from "../../lib/panel/formatPointForPanel";
@@ -20,73 +25,82 @@ export function PointDetailPanel({ point, language }: PointDetailPanelProps) {
 
   if (!point || !formatted) {
     return (
-      <aside className="detail-panel">
-        <div className="panel-title">{t("panel.title")}</div>
-        <div className="empty-panel">{t("panel.noData")}</div>
-      </aside>
+      <Paper
+        component="aside"
+        variant="outlined"
+        sx={{
+          minWidth: 0,
+          minHeight: 0,
+          borderRadius: 1.5,
+          p: 1.4,
+          display: "flex",
+          flexDirection: "column",
+          gap: 1
+        }}
+      >
+        <Typography variant="subtitle1" fontWeight={700}>
+          {t("panel.title")}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          {t("panel.noData")}
+        </Typography>
+      </Paper>
     );
   }
 
-  return (
-    <aside className="detail-panel">
-      <div className="panel-title">{t("panel.title")}</div>
-      <dl className="summary-list">
-        <div className="summary-row">
-          <dt>{t("panel.time")}</dt>
-          <dd>{formatted.summary.time}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.latlon")}</dt>
-          <dd>{formatted.summary.latLon}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.distance")}</dt>
-          <dd>{formatted.summary.distance}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.altitude")}</dt>
-          <dd>{formatted.summary.altitude}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.speed")}</dt>
-          <dd>{formatted.summary.speed}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.voltage")}</dt>
-          <dd>{formatted.summary.voltage}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.current")}</dt>
-          <dd>{formatted.summary.current}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.satellites")}</dt>
-          <dd>{formatted.summary.satellites}</dd>
-        </div>
-        <div className="summary-row">
-          <dt>{t("panel.mode")}</dt>
-          <dd>{formatted.summary.mode}</dd>
-        </div>
-      </dl>
+  const summaryRows = [
+    { label: t("panel.time"), value: formatted.summary.time },
+    { label: t("panel.latlon"), value: formatted.summary.latLon },
+    { label: t("panel.distance"), value: formatted.summary.distance },
+    { label: t("panel.altitude"), value: formatted.summary.altitude },
+    { label: t("panel.speed"), value: formatted.summary.speed },
+    { label: t("panel.voltage"), value: formatted.summary.voltage },
+    { label: t("panel.current"), value: formatted.summary.current },
+    { label: t("panel.satellites"), value: formatted.summary.satellites },
+    { label: t("panel.mode"), value: formatted.summary.mode }
+  ];
 
-      <div className="field-table-wrap">
-        <table className="field-table">
-          <thead>
-            <tr>
-              <th>{t("panel.field")}</th>
-              <th>{t("panel.value")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {formatted.rows.map((row) => (
-              <tr key={row.field}>
-                <td>{row.field}</td>
-                <td>{row.value}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </aside>
+  return (
+    <Paper
+      component="aside"
+      variant="outlined"
+      sx={{
+        minWidth: 0,
+        minHeight: 0,
+        borderRadius: 1.5,
+        p: 1.4,
+        display: "flex",
+        flexDirection: "column",
+        gap: 1
+      }}
+    >
+      <Typography variant="subtitle1" fontWeight={700}>
+        {t("panel.title")}
+      </Typography>
+
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "minmax(86px, auto) minmax(0, 1fr)",
+          gap: "6px 8px"
+        }}
+      >
+        {summaryRows.map((row) => (
+          <Box
+            key={row.label}
+            sx={{
+              display: "contents"
+            }}
+          >
+            <Typography variant="caption" color="text.secondary">
+              {row.label}
+            </Typography>
+            <Typography variant="caption" textAlign="right" sx={{ wordBreak: "break-all" }}>
+              {row.value}
+            </Typography>
+          </Box>
+        ))}
+      </Box>
+    </Paper>
   );
 }

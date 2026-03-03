@@ -1,3 +1,5 @@
+import UploadFileRoundedIcon from "@mui/icons-material/UploadFileRounded";
+import { Button } from "@mui/material";
 import { useRef } from "react";
 
 interface UploadButtonProps {
@@ -10,13 +12,14 @@ export function UploadButton({ label, onFileSelected }: UploadButtonProps) {
 
   return (
     <>
-      <button
-        className="control-button"
+      <Button
+        variant="contained"
+        size="small"
+        startIcon={<UploadFileRoundedIcon fontSize="small" />}
         onClick={() => inputRef.current?.click()}
-        type="button"
       >
         {label}
-      </button>
+      </Button>
       <input
         ref={inputRef}
         className="hidden-file-input"

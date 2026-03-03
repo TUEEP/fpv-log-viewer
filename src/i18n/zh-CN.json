@@ -8,7 +8,7 @@
     "view2d": "2D",
     "view3d": "3D",
     "followMode": "跟随",
-    "followAuto": "AUTO",
+    "followAuto": "自动跟随",
     "followAutoHint": "播放时自动跟随并动态缩放",
     "followFront": "FRONT",
     "followFrontHint": "播放时始终朝向运动方向",
@@ -32,9 +32,11 @@
   },
   "playback": {
     "prev": "上一帧",
+    "slower": "减速",
     "play": "播放",
     "pause": "暂停",
     "next": "下一帧",
+    "faster": "加速",
     "speed": "速度",
     "frame": "帧",
     "time": "时间"
@@ -55,9 +57,6 @@
     "noData": "暂无数据"
   },
   "viewer3d": {
-    "perspective": "透视",
-    "top": "俯视",
-    "side": "侧视",
     "slow": "慢",
     "fast": "快"
   }

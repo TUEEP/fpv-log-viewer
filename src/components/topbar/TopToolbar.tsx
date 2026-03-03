@@ -1,3 +1,12 @@
+import {
+  Box,
+  MenuItem,
+  Paper,
+  Select,
+  Slider,
+  Stack,
+  Typography
+} from "@mui/material";
 import { useTranslation } from "react-i18next";
 import type {
   AltitudeMode,
@@ -15,7 +24,6 @@ import { FullscreenButton } from "../common/FullscreenButton";
 interface TopToolbarProps {
   onUpload: (file: File) => void;
   viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
   mapProvider: MapProvider;
   setMapProvider: (provider: MapProvider) => void;
   mapStyle: MapStyleMode;
@@ -32,10 +40,6 @@ interface TopToolbarProps {
   setPointStride: (stride: number) => void;
   zScale: number;
   setZScale: (scale: number) => void;
-  autoFollowMode: boolean;
-  setAutoFollowMode: (enabled: boolean) => void;
-  frontFollowMode: boolean;
-  setFrontFollowMode: (enabled: boolean) => void;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
 }
@@ -43,7 +47,6 @@ interface TopToolbarProps {
 export function TopToolbar({
   onUpload,
   viewMode,
-  setViewMode,
   mapProvider,
   setMapProvider,
   mapStyle,
@@ -60,160 +63,166 @@ export function TopToolbar({
   setPointStride,
   zScale,
   setZScale,
-  autoFollowMode,
-  setAutoFollowMode,
-  frontFollowMode,
-  setFrontFollowMode,
   isFullscreen,
   onToggleFullscreen
 }: TopToolbarProps) {
   const { t } = useTranslation();
 
   return (
-    <header className="top-toolbar">
-      <div className="toolbar-title">{t("app.title")}</div>
+    <Paper
+      component="header"
+      variant="outlined"
+      sx={{
+        borderRadius: 1.5,
+        px: { xs: 1.2, sm: 1.6 },
+        py: 1.2,
+        display: "flex",
+        flexDirection: "column",
+        gap: 1.25
+      }}
+    >
+      <Stack
+        direction={{ xs: "column", md: "row" }}
+        alignItems={{ xs: "flex-start", md: "center" }}
+        justifyContent="space-between"
+        spacing={1}
+      >
+        <Typography variant="h6">{t("app.title")}</Typography>
 
-      <div className="toolbar-controls">
-        <UploadButton label={t("toolbar.upload")} onFileSelected={onUpload} />
-
-        <div className="segmented-control">
-          <button
-            className={`segment ${viewMode === "2d" ? "active" : ""}`}
-            type="button"
-            onClick={() => setViewMode("2d")}
-          >
-            {t("toolbar.view2d")}
-          </button>
-          <button
-            className={`segment ${viewMode === "3d" ? "active" : ""}`}
-            type="button"
-            onClick={() => setViewMode("3d")}
-          >
-            {t("toolbar.view3d")}
-          </button>
-        </div>
-
-        <label className="inline-control">
-          <span>{t("toolbar.followMode", { defaultValue: "Follow" })}</span>
-          <div className="segmented-control" role="group" aria-label="follow-mode">
-            <button
-              className={`segment ${autoFollowMode ? "active" : ""}`}
-              type="button"
-              onClick={() => setAutoFollowMode(!autoFollowMode)}
-              title={t("toolbar.followAutoHint", {
-                defaultValue: "Auto follow center and zoom while playing"
-              })}
-            >
-              {t("toolbar.followAuto", { defaultValue: "AUTO" })}
-            </button>
-            <button
-              className={`segment ${frontFollowMode ? "active" : ""}`}
-              type="button"
-              onClick={() => setFrontFollowMode(!frontFollowMode)}
-              title={t("toolbar.followFrontHint", {
-                defaultValue: "Keep camera facing movement direction while playing"
-              })}
-            >
-              {t("toolbar.followFront", { defaultValue: "FRONT" })}
-            </button>
-          </div>
-        </label>
-
-        <label className="inline-control">
-          <span>{t("toolbar.mapSource", { defaultValue: "Map Source" })}</span>
-          <select
-            className="control-select"
-            value={mapProvider}
-            onChange={(event) => setMapProvider(event.target.value as MapProvider)}
-          >
-            <option value="osm">{t("toolbar.sourceOsm", { defaultValue: "OpenStreetMap" })}</option>
-            <option value="amap">{t("toolbar.sourceAmap", { defaultValue: "Amap" })}</option>
-          </select>
-        </label>
-
-        <label className="inline-control">
-          <span>{t("toolbar.mapStyle")}</span>
-          <select
-            className="control-select"
-            value={mapStyle}
-            onChange={(event) => setMapStyle(event.target.value as MapStyleMode)}
-          >
-            <option value="street">{t("toolbar.street")}</option>
-            <option value="satellite">{t("toolbar.satellite")}</option>
-          </select>
-        </label>
-
-        <label className="inline-control">
-          <span>{t("toolbar.altitude")}</span>
-          <select
-            className="control-select"
-            value={altitudeMode}
-            onChange={(event) => setAltitudeMode(event.target.value as AltitudeMode)}
-          >
-            <option value="alt1">{t("toolbar.alt1")}</option>
-            <option value="alt2">{t("toolbar.alt2")}</option>
-          </select>
-        </label>
-
-        <label className="inline-control">
-          <span>{t("toolbar.language")}</span>
-          <LanguageSelect value={language} onChange={setLanguage} />
-        </label>
-
-        <label className="inline-control">
-          <span>{t("toolbar.theme")}</span>
+        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+          <UploadButton label={t("toolbar.upload")} onFileSelected={onUpload} />
+          <FullscreenButton
+            label={t("toolbar.fullscreen")}
+            isFullscreen={isFullscreen}
+            onToggle={onToggleFullscreen}
+          />
           <ThemeToggle
             value={theme}
             darkLabel={t("toolbar.dark")}
             lightLabel={t("toolbar.light")}
             onChange={setTheme}
           />
-        </label>
+        </Stack>
+      </Stack>
 
-        <label className="inline-control slider-inline">
-          <span>{t("toolbar.pointSize")}</span>
-          <input
-            type="range"
+      <Stack
+        direction="row"
+        spacing={1.5}
+        useFlexGap
+        flexWrap="wrap"
+        alignItems="flex-end"
+      >
+        <Box sx={{ minWidth: 136 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {t("toolbar.mapSource", { defaultValue: "Map Source" })}
+          </Typography>
+          <Select
+            size="small"
+            value={mapProvider}
+            onChange={(event) => setMapProvider(event.target.value as MapProvider)}
+            fullWidth
+          >
+            <MenuItem value="osm">{t("toolbar.sourceOsm", { defaultValue: "OpenStreetMap" })}</MenuItem>
+            <MenuItem value="amap">{t("toolbar.sourceAmap", { defaultValue: "Amap" })}</MenuItem>
+          </Select>
+        </Box>
+
+        <Box sx={{ minWidth: 116 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {t("toolbar.mapStyle")}
+          </Typography>
+          <Select
+            size="small"
+            value={mapStyle}
+            onChange={(event) => setMapStyle(event.target.value as MapStyleMode)}
+            fullWidth
+          >
+            <MenuItem value="street">{t("toolbar.street")}</MenuItem>
+            <MenuItem value="satellite">{t("toolbar.satellite")}</MenuItem>
+          </Select>
+        </Box>
+
+        <Box sx={{ minWidth: 116 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {t("toolbar.altitude")}
+          </Typography>
+          <Select
+            size="small"
+            value={altitudeMode}
+            onChange={(event) => setAltitudeMode(event.target.value as AltitudeMode)}
+            fullWidth
+          >
+            <MenuItem value="alt1">{t("toolbar.alt1")}</MenuItem>
+            <MenuItem value="alt2">{t("toolbar.alt2")}</MenuItem>
+          </Select>
+        </Box>
+
+        <Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {t("toolbar.language")}
+          </Typography>
+          <LanguageSelect value={language} onChange={setLanguage} />
+        </Box>
+
+        <Box sx={{ width: { xs: 130, sm: 146 } }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {t("toolbar.pointSize")}: {pointSize.toFixed(1)}
+          </Typography>
+          <Slider
+            size="small"
             min={0.4}
             max={3}
             step={0.1}
             value={pointSize}
-            onChange={(event) => setPointSize(Number(event.target.value))}
+            valueLabelDisplay="auto"
+            onChange={(_, value) => {
+              if (typeof value === "number") {
+                setPointSize(value);
+              }
+            }}
           />
-        </label>
+        </Box>
 
-        <label className="inline-control slider-inline">
-          <span>{t("toolbar.pointStride")}</span>
-          <input
-            type="range"
+        <Box sx={{ width: { xs: 130, sm: 146 } }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            {t("toolbar.pointStride")}: {pointStride}
+          </Typography>
+          <Slider
+            size="small"
             min={1}
             max={10}
             step={1}
             value={pointStride}
-            onChange={(event) => setPointStride(Number(event.target.value))}
+            valueLabelDisplay="auto"
+            onChange={(_, value) => {
+              if (typeof value === "number") {
+                setPointStride(value);
+              }
+            }}
           />
-        </label>
+        </Box>
 
         {viewMode === "3d" ? (
-          <label className="inline-control slider-inline">
-            <span>{t("toolbar.zScale")}</span>
-            <input
-              type="range"
+          <Box sx={{ width: { xs: 130, sm: 146 } }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+              {t("toolbar.zScale")}: {zScale.toFixed(1)}
+            </Typography>
+            <Slider
+              size="small"
               min={0.5}
               max={20}
               step={0.5}
               value={zScale}
-              onChange={(event) => setZScale(Number(event.target.value))}
+              valueLabelDisplay="auto"
+              onChange={(_, value) => {
+                if (typeof value === "number") {
+                  setZScale(value);
+                }
+              }}
             />
-          </label>
+          </Box>
         ) : null}
-
-        <FullscreenButton
-          label={t("toolbar.fullscreen")}
-          isFullscreen={isFullscreen}
-          onToggle={onToggleFullscreen}
-        />
-      </div>
-    </header>
+      </Stack>
+    </Paper>
   );
 }

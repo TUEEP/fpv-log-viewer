@@ -19,7 +19,7 @@ export type MapProvider = "osm" | "amap";
 export type ViewMode = "2d" | "3d";
 export type Language = "zh-CN" | "en" | "ja";
 export type ThemeMode = "dark" | "light";
-export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8;
+export type PlaybackSpeed = 0.5 | 1 | 2 | 4 | 8 | 16;
 
 export interface PlaybackState {
   isPlaying: boolean;
@@ -45,12 +45,6 @@ export interface PanelSummary {
   mode: string;
 }
 
-export interface PanelRow {
-  field: string;
-  value: string;
-}
-
 export interface PanelFormatResult {
   summary: PanelSummary;
-  rows: PanelRow[];
 }

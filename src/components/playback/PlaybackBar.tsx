@@ -1,3 +1,17 @@
+import FastForwardRoundedIcon from "@mui/icons-material/FastForwardRounded";
+import FastRewindRoundedIcon from "@mui/icons-material/FastRewindRounded";
+import PauseRoundedIcon from "@mui/icons-material/PauseRounded";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import {
+  Box,
+  IconButton,
+  MenuItem,
+  Paper,
+  Select,
+  Slider,
+  Stack,
+  Typography
+} from "@mui/material";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { playbackSpeedOptions } from "../../store/viewerStore";
@@ -11,9 +25,9 @@ interface PlaybackBarProps {
   currentTimestamp: number | null;
   startTimestamp: number | null;
   endTimestamp: number | null;
-  onPrev: () => void;
+  onDecreaseSpeed: () => void;
   onPlayPause: () => void;
-  onNext: () => void;
+  onIncreaseSpeed: () => void;
   onSpeedChange: (speed: PlaybackSpeed) => void;
   onSeek: (index: number) => void;
 }
@@ -36,9 +50,9 @@ export function PlaybackBar({
   currentTimestamp,
   startTimestamp,
   endTimestamp,
-  onPrev,
+  onDecreaseSpeed,
   onPlayPause,
-  onNext,
+  onIncreaseSpeed,
   onSpeedChange,
   onSeek
 }: PlaybackBarProps) {
@@ -59,59 +73,95 @@ export function PlaybackBar({
   }, [startTimestamp, endTimestamp]);
 
   const disabled = total <= 1;
+  const sliderMax = Math.max(total - 1, 0);
+  const speedIndex = playbackSpeedOptions.indexOf(speed);
+  const canDecreaseSpeed = speedIndex > 0;
+  const canIncreaseSpeed = speedIndex >= 0 && speedIndex < playbackSpeedOptions.length - 1;
 
   return (
-    <footer className="playback-bar">
-      <button type="button" className="control-button" onClick={onPrev} disabled={disabled}>
-        {t("playback.prev")}
-      </button>
-      <button
-        type="button"
-        className="control-button active"
-        onClick={onPlayPause}
-        disabled={disabled}
+    <Paper component="footer" variant="outlined" sx={{ borderRadius: 1.5, px: 1.2, py: 1 }}>
+      <Stack
+        direction={{ xs: "column", md: "row" }}
+        spacing={1}
+        alignItems={{ xs: "stretch", md: "center" }}
       >
-        {isPlaying ? t("playback.pause") : t("playback.play")}
-      </button>
-      <button type="button" className="control-button" onClick={onNext} disabled={disabled}>
-        {t("playback.next")}
-      </button>
+        <Stack direction="row" spacing={0.4} alignItems="center">
+          <IconButton
+            size="small"
+            onClick={onDecreaseSpeed}
+            disabled={disabled || !canDecreaseSpeed}
+            aria-label={t("playback.slower")}
+          >
+            <FastRewindRoundedIcon />
+          </IconButton>
+          <IconButton
+            size="small"
+            color={isPlaying ? "secondary" : "primary"}
+            onClick={onPlayPause}
+            disabled={disabled}
+            aria-label={isPlaying ? t("playback.pause") : t("playback.play")}
+          >
+            {isPlaying ? <PauseRoundedIcon /> : <PlayArrowRoundedIcon />}
+          </IconButton>
+          <IconButton
+            size="small"
+            onClick={onIncreaseSpeed}
+            disabled={disabled || !canIncreaseSpeed}
+            aria-label={t("playback.faster")}
+          >
+            <FastForwardRoundedIcon />
+          </IconButton>
 
-      <label className="inline-control">
-        <span>{t("playback.speed")}</span>
-        <select
-          className="control-select"
-          value={speed}
-          onChange={(event) => onSpeedChange(Number(event.target.value) as PlaybackSpeed)}
-          disabled={disabled}
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ pl: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">
+              {t("playback.speed")}
+            </Typography>
+            <Select
+              size="small"
+              value={speed}
+              onChange={(event) => onSpeedChange(Number(event.target.value) as PlaybackSpeed)}
+              disabled={disabled}
+              sx={{ minWidth: 80 }}
+            >
+              {playbackSpeedOptions.map((option) => (
+                <MenuItem key={option} value={option}>
+                  {option}x
+                </MenuItem>
+              ))}
+            </Select>
+          </Stack>
+        </Stack>
+
+        <Box sx={{ flex: 1, px: { md: 1 }, minWidth: 0 }}>
+          <Slider
+            size="small"
+            min={0}
+            max={sliderMax}
+            value={Math.min(currentIndex, sliderMax)}
+            onChange={(_, value) => {
+              if (typeof value === "number") {
+                onSeek(Math.round(value));
+              }
+            }}
+            disabled={disabled}
+            aria-label="playback-seek"
+          />
+        </Box>
+
+        <Stack
+          direction={{ xs: "row", md: "column" }}
+          justifyContent="space-between"
+          spacing={{ xs: 1.2, md: 0.2 }}
+          sx={{ minWidth: { md: 188 } }}
         >
-          {playbackSpeedOptions.map((option) => (
-            <option key={option} value={option}>
-              {option}x
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <div className="timeline-wrap">
-        <input
-          type="range"
-          min={0}
-          max={Math.max(total - 1, 0)}
-          value={Math.min(currentIndex, Math.max(total - 1, 0))}
-          onChange={(event) => onSeek(Number(event.target.value))}
-          disabled={disabled}
-        />
-      </div>
-
-      <div className="timeline-meta">
-        <div>
-          {t("playback.frame")}: {total === 0 ? "0 / 0" : `${currentIndex + 1} / ${total}`}
-        </div>
-        <div>
-          {t("playback.time")}: {formatDuration(currentElapsed)} / {formatDuration(totalElapsed)}
-        </div>
-      </div>
-    </footer>
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+            {t("playback.frame")}: {total === 0 ? "0 / 0" : `${currentIndex + 1} / ${total}`}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
+            {t("playback.time")}: {formatDuration(currentElapsed)} / {formatDuration(totalElapsed)}
+          </Typography>
+        </Stack>
+      </Stack>
+    </Paper>
   );
 }

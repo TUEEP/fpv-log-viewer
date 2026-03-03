@@ -1,3 +1,6 @@
+import DarkModeRoundedIcon from "@mui/icons-material/DarkModeRounded";
+import LightModeRoundedIcon from "@mui/icons-material/LightModeRounded";
+import { IconButton, Tooltip } from "@mui/material";
 import type { ThemeMode } from "../../types/flight";
 
 interface ThemeToggleProps {
@@ -8,22 +11,19 @@ interface ThemeToggleProps {
 }
 
 export function ThemeToggle({ value, darkLabel, lightLabel, onChange }: ThemeToggleProps) {
+  const isDark = value === "dark";
+  const currentLabel = isDark ? darkLabel : lightLabel;
+
   return (
-    <div className="segmented-control">
-      <button
-        className={`segment ${value === "dark" ? "active" : ""}`}
-        type="button"
-        onClick={() => onChange("dark")}
+    <Tooltip title={currentLabel}>
+      <IconButton
+        size="small"
+        color={isDark ? "secondary" : "primary"}
+        aria-label={currentLabel}
+        onClick={() => onChange(isDark ? "light" : "dark")}
       >
-        {darkLabel}
-      </button>
-      <button
-        className={`segment ${value === "light" ? "active" : ""}`}
-        type="button"
-        onClick={() => onChange("light")}
-      >
-        {lightLabel}
-      </button>
-    </div>
+        {isDark ? <DarkModeRoundedIcon fontSize="small" /> : <LightModeRoundedIcon fontSize="small" />}
+      </IconButton>
+    </Tooltip>
   );
 }

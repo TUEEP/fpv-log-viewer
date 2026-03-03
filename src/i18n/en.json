@@ -8,7 +8,7 @@
     "view2d": "2D",
     "view3d": "3D",
     "followMode": "Follow",
-    "followAuto": "AUTO",
+    "followAuto": "Auto Follow",
     "followAutoHint": "Auto follow center and zoom while playing",
     "followFront": "FRONT",
     "followFrontHint": "Keep camera facing movement direction while playing",
@@ -37,7 +37,9 @@
     "next": "Next",
     "speed": "Speed",
     "frame": "Frame",
-    "time": "Time"
+    "time": "Time",
+    "slower": "Slower",
+    "faster": "Faster"
   },
   "panel": {
     "title": "Track Point Details",
@@ -55,9 +57,6 @@
     "noData": "No data."
   },
   "viewer3d": {
-    "perspective": "Perspective",
-    "top": "Top",
-    "side": "Side",
     "slow": "Slow",
     "fast": "Fast"
   }

@@ -11,7 +11,7 @@ import type {
 } from "../types/flight";
 import { advancePlaybackByDelta, stepIndex } from "../lib/playback/playbackEngine";
 
-const SPEED_OPTIONS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8];
+const SPEED_OPTIONS: PlaybackSpeed[] = [0.5, 1, 2, 4, 8, 16];
 
 function detectInitialLanguage(): Language {
   const language =

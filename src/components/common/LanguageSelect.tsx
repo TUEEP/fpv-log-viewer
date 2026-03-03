@@ -1,3 +1,4 @@
+import { MenuItem, Select } from "@mui/material";
 import type { Language } from "../../types/flight";
 
 interface LanguageSelectProps {
@@ -7,14 +8,15 @@ interface LanguageSelectProps {
 
 export function LanguageSelect({ value, onChange }: LanguageSelectProps) {
   return (
-    <select
-      className="control-select"
+    <Select
+      size="small"
       value={value}
       onChange={(event) => onChange(event.target.value as Language)}
+      sx={{ minWidth: 112 }}
     >
-      <option value="zh-CN">中文</option>
-      <option value="en">English</option>
-      <option value="ja">日本語</option>
-    </select>
+      <MenuItem value="zh-CN">中文</MenuItem>
+      <MenuItem value="en">English</MenuItem>
+      <MenuItem value="ja">日本語</MenuItem>
+    </Select>
   );
 }

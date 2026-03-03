@@ -1,4 +1,4 @@
-import type { Language, PanelFormatResult, PanelRow, PanelSummary } from "../../types/flight";
+import type { Language, PanelFormatResult, PanelSummary } from "../../types/flight";
 
 const localeTable = {
   "zh-CN": {
@@ -82,12 +82,5 @@ export function formatPointForPanel(
     mode: formatNullable(modeValue, locale.na)
   };
 
-  const rows: PanelRow[] = Object.entries(point.raw)
-    .filter(([key]) => !key.startsWith("__"))
-    .map(([field, value]) => ({
-      field,
-      value: formatNullable(value, locale.na)
-    }));
-
-  return { summary, rows };
+  return { summary };
 }

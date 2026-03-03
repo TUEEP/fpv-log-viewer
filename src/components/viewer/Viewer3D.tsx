@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { Box, Paper, Typography } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
@@ -8,6 +17,7 @@ import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildTileUrl, getRasterTileConfig } from "../../lib/map/rasterTiles";
 import { resolveTrailRange } from "../../lib/playback/trailWindow";
 import type { AltitudeMode, FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
+import { ViewerCornerControls } from "./ViewerCornerControls";
 
 interface Viewer3DProps {
   points: FlightPoint[];
@@ -22,6 +32,9 @@ interface Viewer3DProps {
   frontFollowMode: boolean;
   pointSize: number;
   pointStride: number;
+  setAutoFollowMode: (enabled: boolean) => void;
+  setFrontFollowMode: (enabled: boolean) => void;
+  onToggleViewMode: () => void;
   onSelect: (index: number) => void;
 }
 
@@ -81,8 +94,6 @@ interface SceneData {
   cosOriginLat: number;
   fitToken: string;
 }
-
-type CameraPreset = "perspective" | "top" | "side";
 
 interface FollowSnapshot3D {
   current: [number, number, number];
@@ -853,6 +864,9 @@ export function Viewer3D({
   frontFollowMode,
   pointSize,
   pointStride,
+  setAutoFollowMode,
+  setFrontFollowMode,
+  onToggleViewMode,
   onSelect
 }: Viewer3DProps) {
   const { t } = useTranslation();
@@ -862,7 +876,6 @@ export function Viewer3D({
   const tileTransitionJobRef = useRef(0);
   const prevRenderedTileZoomRef = useRef<number | null>(null);
   const lastTileViewportUpdateMsRef = useRef(0);
-  const [cameraPreset, setCameraPreset] = useState<CameraPreset>("perspective");
   const [tileViewport, setTileViewport] = useState<TileViewport>({
     centerX: 0,
     centerY: 0,
@@ -1316,58 +1329,32 @@ export function Viewer3D({
     manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
   }, []);
 
-  const applyCameraPreset = useCallback(
-    (preset: CameraPreset) => {
-      const controls = controlsRef.current;
-      if (!controls) {
-        return;
-      }
+  const fitCameraToScene = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
 
-      const target = new THREE.Vector3(...sceneData.target);
-      const baseDistance = Math.max(100, sceneData.xySpan * 1.05);
-      const sideDistance = Math.max(120, sceneData.xySpan * 1.35);
-      const topDistance = Math.max(baseDistance * 1.35, sceneData.zSpan * 2.6);
+    const target = new THREE.Vector3(...sceneData.target);
+    const baseDistance = Math.max(100, sceneData.xySpan * 1.05);
+    const offset = new THREE.Vector3(baseDistance, -baseDistance * 0.95, Math.max(40, baseDistance * 0.62));
 
-      let offset: THREE.Vector3;
-      if (preset === "top") {
-        offset = new THREE.Vector3(0, 0, topDistance);
-      } else if (preset === "side") {
-        offset = new THREE.Vector3(sideDistance, 0, Math.max(30, sceneData.zSpan * 0.6));
-      } else {
-        offset = new THREE.Vector3(baseDistance, -baseDistance * 0.95, Math.max(40, baseDistance * 0.62));
-      }
+    const camera = controls.object as THREE.PerspectiveCamera;
+    camera.position.copy(target).add(offset);
+    camera.near = 0.1;
+    camera.far = Math.max(12000, sceneData.xySpan * 30);
+    camera.updateProjectionMatrix();
 
-      const camera = controls.object as THREE.PerspectiveCamera;
-      camera.position.copy(target).add(offset);
-      camera.near = 0.1;
-      camera.far = Math.max(12000, sceneData.xySpan * 30);
-      camera.updateProjectionMatrix();
-
-      controls.target.copy(target);
-      controls.update();
-      syncTileViewportFromControls();
-    },
-    [sceneData.target, sceneData.xySpan, sceneData.zSpan, syncTileViewportFromControls]
+    controls.target.copy(target);
+    controls.update();
+    syncTileViewportFromControls();
+  },
+    [sceneData.target, sceneData.xySpan, syncTileViewportFromControls]
   );
 
-  const setPerspectiveView = useCallback(() => {
-    setCameraPreset("perspective");
-    applyCameraPreset("perspective");
-  }, [applyCameraPreset]);
-
-  const setTopView = useCallback(() => {
-    setCameraPreset("top");
-    applyCameraPreset("top");
-  }, [applyCameraPreset]);
-
-  const setSideView = useCallback(() => {
-    setCameraPreset("side");
-    applyCameraPreset("side");
-  }, [applyCameraPreset]);
-
   useEffect(() => {
-    applyCameraPreset(cameraPreset);
-  }, [sceneData.fitToken, cameraPreset, applyCameraPreset]);
+    fitCameraToScene();
+  }, [sceneData.fitToken, fitCameraToScene]);
 
   return (
     <div className="viewer-canvas viewer-3d">
@@ -1455,35 +1442,51 @@ export function Viewer3D({
         />
       </Canvas>
 
-      <div className="viewer-3d-view-buttons" role="group" aria-label="3d-view-presets">
-        <button
-          type="button"
-          className={`viewer-3d-view-button ${cameraPreset === "perspective" ? "active" : ""}`}
-          onClick={setPerspectiveView}
-        >
-          {t("viewer3d.perspective", { defaultValue: "Perspective" })}
-        </button>
-        <button
-          type="button"
-          className={`viewer-3d-view-button ${cameraPreset === "top" ? "active" : ""}`}
-          onClick={setTopView}
-        >
-          {t("viewer3d.top", { defaultValue: "Top" })}
-        </button>
-        <button
-          type="button"
-          className={`viewer-3d-view-button ${cameraPreset === "side" ? "active" : ""}`}
-          onClick={setSideView}
-        >
-          {t("viewer3d.side", { defaultValue: "Side" })}
-        </button>
-      </div>
+      <Paper
+        variant="outlined"
+        aria-hidden="true"
+        sx={{
+          position: "absolute",
+          right: 12,
+          top: 12,
+          zIndex: 5,
+          borderRadius: 1,
+          px: 1.1,
+          py: 0.6,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.8,
+          backdropFilter: "blur(3px)",
+          bgcolor: (theme) =>
+            theme.palette.mode === "dark"
+              ? alpha(theme.palette.background.paper, 0.74)
+              : alpha(theme.palette.background.paper, 0.92)
+        }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          {t("viewer3d.slow", { defaultValue: "Slow" })}
+        </Typography>
+        <Box
+          sx={{
+            width: 92,
+            height: 8,
+            borderRadius: 999,
+            background: "linear-gradient(90deg, #2f77ff 0%, #ff3f2c 100%)"
+          }}
+        />
+        <Typography variant="caption" color="text.secondary">
+          {t("viewer3d.fast", { defaultValue: "Fast" })}
+        </Typography>
+      </Paper>
 
-      <div className="viewer-3d-speed-legend" aria-hidden="true">
-        <span>{t("viewer3d.slow", { defaultValue: "Slow" })}</span>
-        <div className="viewer-3d-speed-gradient" />
-        <span>{t("viewer3d.fast", { defaultValue: "Fast" })}</span>
-      </div>
+      <ViewerCornerControls
+        viewMode="3d"
+        autoFollowMode={autoFollowMode}
+        frontFollowMode={frontFollowMode}
+        onAutoFollowChange={setAutoFollowMode}
+        onFrontFollowChange={setFrontFollowMode}
+        onToggleViewMode={onToggleViewMode}
+      />
     </div>
   );
 }

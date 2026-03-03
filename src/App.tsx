@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Box, CssBaseline, ThemeProvider, Typography } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import i18n from "./i18n";
 import { TopToolbar } from "./components/topbar/TopToolbar";
@@ -8,7 +9,8 @@ import { PointDetailPanel } from "./components/sidebar/PointDetailPanel";
 import { PlaybackBar } from "./components/playback/PlaybackBar";
 import { parseEdgeTxCsv } from "./lib/csv/parseEdgeTxCsv";
 import { buildSmoothedTrack } from "./lib/math/smoothPath";
-import { useViewerStore } from "./store/viewerStore";
+import { playbackSpeedOptions, useViewerStore } from "./store/viewerStore";
+import { createAppTheme } from "./theme/muiTheme";
 
 export default function App() {
   const { t } = useTranslation();
@@ -53,10 +55,7 @@ export default function App() {
 
   const smoothedTrack = useMemo(() => buildSmoothedTrack(points, 0.2, 10), [points]);
   const activeDetailPoint = points[selectedIndex] ?? points[playback.currentIndex] ?? null;
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+  const muiTheme = useMemo(() => createAppTheme(theme), [theme]);
 
   useEffect(() => {
     void i18n.changeLanguage(language);
@@ -132,110 +131,176 @@ export default function App() {
     togglePlay();
   };
 
+  const handleAdjustSpeed = (direction: -1 | 1) => {
+    const currentSpeedIndex = playbackSpeedOptions.indexOf(playback.speed);
+    if (currentSpeedIndex < 0) {
+      return;
+    }
+    const nextSpeedIndex = Math.max(
+      0,
+      Math.min(playbackSpeedOptions.length - 1, currentSpeedIndex + direction)
+    );
+    if (nextSpeedIndex === currentSpeedIndex) {
+      return;
+    }
+    setSpeed(playbackSpeedOptions[nextSpeedIndex]);
+  };
+
   return (
-    <div className="app-shell" ref={shellRef}>
-      <TopToolbar
-        onUpload={handleUpload}
-        viewMode={viewMode}
-        setViewMode={setViewMode}
-        mapProvider={mapProvider}
-        setMapProvider={setMapProvider}
-        mapStyle={mapStyle}
-        setMapStyle={setMapStyle}
-        altitudeMode={altitudeMode}
-        setAltitudeMode={setAltitudeMode}
-        language={language}
-        setLanguage={setLanguage}
-        theme={theme}
-        setTheme={setTheme}
-        pointSize={pointSize}
-        setPointSize={setPointSize}
-        pointStride={pointStride}
-        setPointStride={setPointStride}
-        zScale={zScale}
-        setZScale={setZScale}
-        autoFollowMode={autoFollowMode}
-        setAutoFollowMode={setAutoFollowMode}
-        frontFollowMode={frontFollowMode}
-        setFrontFollowMode={setFrontFollowMode}
-        isFullscreen={isFullscreen}
-        onToggleFullscreen={handleToggleFullscreen}
-      />
-
-      <div className="main-layout">
-        <section className="viewer-panel">
-          {viewMode === "2d" ? (
-            <Viewer2D
-              points={points}
-              smoothedTrack={smoothedTrack}
-              selectedIndex={selectedIndex}
-              currentIndex={playback.currentIndex}
-              isPlaying={playback.isPlaying}
-              autoFollowMode={autoFollowMode}
-              frontFollowMode={frontFollowMode}
-              mapProvider={mapProvider}
-              mapStyle={mapStyle}
-              pointSize={pointSize}
-              pointStride={pointStride}
-              onSelect={handlePointSelect}
-            />
-          ) : (
-            <Viewer3D
-              points={points}
-              altitudeMode={altitudeMode}
-              mapProvider={mapProvider}
-              mapStyle={mapStyle}
-              zScale={zScale}
-              selectedIndex={selectedIndex}
-              currentIndex={playback.currentIndex}
-              isPlaying={playback.isPlaying}
-              autoFollowMode={autoFollowMode}
-              frontFollowMode={frontFollowMode}
-              pointSize={pointSize}
-              pointStride={pointStride}
-              onSelect={handlePointSelect}
-            />
-          )}
-
-          {points.length === 0 ? (
-            <div className="empty-overlay">
-              <div>{isLoading ? "Parsing CSV..." : t("app.empty")}</div>
-            </div>
-          ) : null}
-
-          {errors.length > 0 ? (
-            <div className="warning-badge">{`${errors.length} parse warnings`}</div>
-          ) : null}
-        </section>
-
-        <PointDetailPanel point={activeDetailPoint} language={language} />
-      </div>
-
-      <PlaybackBar
-        total={points.length}
-        currentIndex={playback.currentIndex}
-        isPlaying={playback.isPlaying}
-        speed={playback.speed}
-        currentTimestamp={points[playback.currentIndex]?.timestampMs ?? null}
-        startTimestamp={points[0]?.timestampMs ?? null}
-        endTimestamp={points[points.length - 1]?.timestampMs ?? null}
-        onPrev={() => {
-          const next = Math.max(playback.currentIndex - 1, 0);
-          setCurrentIndex(next);
-          setSelectedIndex(next);
+    <ThemeProvider theme={muiTheme}>
+      <CssBaseline />
+      <Box
+        ref={shellRef}
+        sx={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 1,
+          p: { xs: 1, sm: 1.2 }
         }}
-        onPlayPause={handlePlayPause}
-        onNext={() => {
-          const next = Math.min(playback.currentIndex + 1, Math.max(points.length - 1, 0));
-          setCurrentIndex(next);
-          setSelectedIndex(next);
-        }}
-        onSpeedChange={setSpeed}
-        onSeek={(index) => {
-          setCurrentIndex(index);
-          setSelectedIndex(index);
-        }}
-      />
-    </div>
+      >
+        <TopToolbar
+          onUpload={handleUpload}
+          viewMode={viewMode}
+          mapProvider={mapProvider}
+          setMapProvider={setMapProvider}
+          mapStyle={mapStyle}
+          setMapStyle={setMapStyle}
+          altitudeMode={altitudeMode}
+          setAltitudeMode={setAltitudeMode}
+          language={language}
+          setLanguage={setLanguage}
+          theme={theme}
+          setTheme={setTheme}
+          pointSize={pointSize}
+          setPointSize={setPointSize}
+          pointStride={pointStride}
+          setPointStride={setPointStride}
+          zScale={zScale}
+          setZScale={setZScale}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={handleToggleFullscreen}
+        />
+
+        <Box
+          sx={{
+            minHeight: 0,
+            flex: 1,
+            display: "grid",
+            gap: 1,
+            gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1fr) 300px" },
+            gridTemplateRows: { xs: "minmax(0, 1fr) minmax(240px, 36vh)", lg: "minmax(0, 1fr)" }
+          }}
+        >
+          <Box
+            sx={{
+              minWidth: 0,
+              minHeight: 0,
+              position: "relative",
+              borderRadius: 1.5,
+              overflow: "hidden",
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "background.paper"
+            }}
+          >
+            {viewMode === "2d" ? (
+              <Viewer2D
+                points={points}
+                smoothedTrack={smoothedTrack}
+                selectedIndex={selectedIndex}
+                currentIndex={playback.currentIndex}
+                isPlaying={playback.isPlaying}
+                autoFollowMode={autoFollowMode}
+                frontFollowMode={frontFollowMode}
+                mapProvider={mapProvider}
+                mapStyle={mapStyle}
+                pointSize={pointSize}
+                pointStride={pointStride}
+                setAutoFollowMode={setAutoFollowMode}
+                setFrontFollowMode={setFrontFollowMode}
+                onToggleViewMode={() => setViewMode("3d")}
+                onSelect={handlePointSelect}
+              />
+            ) : (
+              <Viewer3D
+                points={points}
+                altitudeMode={altitudeMode}
+                mapProvider={mapProvider}
+                mapStyle={mapStyle}
+                zScale={zScale}
+                selectedIndex={selectedIndex}
+                currentIndex={playback.currentIndex}
+                isPlaying={playback.isPlaying}
+                autoFollowMode={autoFollowMode}
+                frontFollowMode={frontFollowMode}
+                pointSize={pointSize}
+                pointStride={pointStride}
+                setAutoFollowMode={setAutoFollowMode}
+                setFrontFollowMode={setFrontFollowMode}
+                onToggleViewMode={() => setViewMode("2d")}
+                onSelect={handlePointSelect}
+              />
+            )}
+
+            {points.length === 0 ? (
+              <Box
+                sx={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  pointerEvents: "none",
+                  backgroundColor: "rgba(10, 24, 38, 0.38)"
+                }}
+              >
+                <Typography variant="subtitle1" color="text.secondary">
+                  {isLoading ? "Parsing CSV..." : t("app.empty")}
+                </Typography>
+              </Box>
+            ) : null}
+
+            {errors.length > 0 ? (
+              <Alert
+                severity="warning"
+                variant="filled"
+                sx={{
+                  position: "absolute",
+                  left: 12,
+                  bottom: 12,
+                  py: 0.2,
+                  px: 0.8,
+                  zIndex: 6,
+                  alignItems: "center"
+                }}
+              >
+                {`${errors.length} parse warnings`}
+              </Alert>
+            ) : null}
+          </Box>
+
+          <PointDetailPanel point={activeDetailPoint} language={language} />
+        </Box>
+
+        <PlaybackBar
+          total={points.length}
+          currentIndex={playback.currentIndex}
+          isPlaying={playback.isPlaying}
+          speed={playback.speed}
+          currentTimestamp={points[playback.currentIndex]?.timestampMs ?? null}
+          startTimestamp={points[0]?.timestampMs ?? null}
+          endTimestamp={points[points.length - 1]?.timestampMs ?? null}
+          onDecreaseSpeed={() => handleAdjustSpeed(-1)}
+          onPlayPause={handlePlayPause}
+          onIncreaseSpeed={() => handleAdjustSpeed(1)}
+          onSpeedChange={setSpeed}
+          onSeek={(index) => {
+            setCurrentIndex(index);
+            setSelectedIndex(index);
+          }}
+        />
+      </Box>
+    </ThemeProvider>
   );
 }

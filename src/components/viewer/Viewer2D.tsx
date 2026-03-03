@@ -4,6 +4,7 @@ import type { FlightPoint, MapProvider, MapStyleMode } from "../../types/flight"
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildRasterStyle } from "../../lib/map/rasterTiles";
 import { resolveTrailRange } from "../../lib/playback/trailWindow";
+import { ViewerCornerControls } from "./ViewerCornerControls";
 
 interface Viewer2DProps {
   points: FlightPoint[];
@@ -17,6 +18,9 @@ interface Viewer2DProps {
   mapStyle: MapStyleMode;
   pointSize: number;
   pointStride: number;
+  setAutoFollowMode: (enabled: boolean) => void;
+  setFrontFollowMode: (enabled: boolean) => void;
+  onToggleViewMode: () => void;
   onSelect: (index: number) => void;
 }
 
@@ -47,6 +51,9 @@ const LAYER_END = "fpv-point-end";
 const LAYER_CURRENT = "fpv-point-current";
 const LAYER_SELECTED = "fpv-point-selected";
 const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
+const PLAYBACK_DATA_PUSH_INTERVAL_MS = 50;
+const PLAYBACK_MAX_LINE_VERTICES = 900;
+const PLAYBACK_MAX_POINT_FEATURES = 220;
 const FOLLOW_LOOK_AHEAD_DEFAULT_MS = 1400;
 const FOLLOW_LOOK_AHEAD_MIN_MS = 700;
 const FOLLOW_LOOK_AHEAD_MAX_MS = 3200;
@@ -160,6 +167,37 @@ function resolveInterpolatedLeadCoord(
     lon: lowerPoint.lon + (upperPoint.lon - lowerPoint.lon) * alpha,
     lat: lowerPoint.lat + (upperPoint.lat - lowerPoint.lat) * alpha
   };
+}
+
+function downsampleLineVertices(track: [number, number][], maxVertices: number): [number, number][] {
+  if (track.length <= maxVertices || maxVertices < 2) {
+    return track;
+  }
+
+  const result: [number, number][] = [];
+  const lastIndex = track.length - 1;
+  const step = lastIndex / (maxVertices - 1);
+  for (let i = 0; i < maxVertices; i += 1) {
+    const sourceIndex = Math.min(lastIndex, Math.round(i * step));
+    const coord = track[sourceIndex];
+    if (!coord) {
+      continue;
+    }
+    if (result.length === 0 || result[result.length - 1]![0] !== coord[0] || result[result.length - 1]![1] !== coord[1]) {
+      result.push(coord);
+    }
+  }
+
+  const first = track[0];
+  const last = track[lastIndex];
+  if (result.length === 0 || result[0] !== first) {
+    result.unshift(first);
+  }
+  if (result[result.length - 1] !== last) {
+    result.push(last);
+  }
+
+  return result;
 }
 
 function ensureLayers(map: maplibregl.Map) {
@@ -283,6 +321,9 @@ export function Viewer2D({
   mapStyle,
   pointSize,
   pointStride,
+  setAutoFollowMode,
+  setFrontFollowMode,
+  onToggleViewMode,
   onSelect
 }: Viewer2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -292,6 +333,9 @@ export function Viewer2D({
   const pointFeaturesRef = useRef<Array<Record<string, unknown>>>([]);
   const pointSizeRef = useRef(pointSize);
   const manualFollowUntilRef = useRef(0);
+  const lastDataPushAtRef = useRef(0);
+  const dataPushTimerRef = useRef<number | null>(null);
+  const dataPushPendingRef = useRef(false);
   const lookAheadMsRef = useRef(FOLLOW_LOOK_AHEAD_DEFAULT_MS);
   const followTargetRef = useRef<{
     trackPosition: boolean;
@@ -312,21 +356,49 @@ export function Viewer2D({
     lookAheadMsRef.current = FOLLOW_LOOK_AHEAD_DEFAULT_MS;
   }, [points.length, mapProvider]);
 
-  const syncMapVisuals = (map: maplibregl.Map) => {
+  const clearPendingDataPush = () => {
+    if (dataPushTimerRef.current !== null) {
+      window.clearTimeout(dataPushTimerRef.current);
+      dataPushTimerRef.current = null;
+    }
+  };
+
+  const applyPointRadii = (map: maplibregl.Map) => {
     if (!map || !map.getStyle()) {
       return;
     }
 
     if (!map.isStyleLoaded()) {
-      map.once("idle", () => syncMapVisuals(map));
+      map.once("idle", () => applyPointRadii(map));
+      return;
+    }
+
+    try {
+      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.5 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_START, "circle-radius", 4.5 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_END, "circle-radius", 4.5 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_CURRENT, "circle-radius", 5.3 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 5 * pointSizeRef.current);
+    } catch {
+      map.once("idle", () => applyPointRadii(map));
+    }
+  };
+
+  const pushMapData = (map: maplibregl.Map) => {
+    if (!map || !map.getStyle()) {
+      return;
+    }
+
+    if (!map.isStyleLoaded()) {
+      map.once("idle", () => pushMapData(map));
       return;
     }
 
     try {
       ensureLayers(map);
 
-      const smoothSource = map.getSource(SOURCE_SMOOTH) as maplibregl.GeoJSONSource;
-      smoothSource.setData({
+      const smoothSource = map.getSource(SOURCE_SMOOTH) as maplibregl.GeoJSONSource | undefined;
+      smoothSource?.setData({
         type: "Feature",
         properties: {},
         geometry: {
@@ -335,21 +407,57 @@ export function Viewer2D({
         }
       } as any);
 
-      const pointSource = map.getSource(SOURCE_POINTS) as maplibregl.GeoJSONSource;
-      pointSource.setData({
+      const pointSource = map.getSource(SOURCE_POINTS) as maplibregl.GeoJSONSource | undefined;
+      pointSource?.setData({
         type: "FeatureCollection",
         features: pointFeaturesRef.current
       } as any);
 
-      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.5 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_START, "circle-radius", 4.5 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_END, "circle-radius", 4.5 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_CURRENT, "circle-radius", 5.3 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 5 * pointSizeRef.current);
+      dataPushPendingRef.current = false;
+      lastDataPushAtRef.current = performance.now();
     } catch {
-      map.once("idle", () => syncMapVisuals(map));
+      map.once("idle", () => pushMapData(map));
     }
   };
+
+  const scheduleMapDataPush = (map: maplibregl.Map, throttled: boolean) => {
+    dataPushPendingRef.current = true;
+    const flush = () => {
+      const activeMap = mapRef.current ?? map;
+      if (!activeMap || !dataPushPendingRef.current) {
+        return;
+      }
+      pushMapData(activeMap);
+    };
+
+    if (!throttled) {
+      clearPendingDataPush();
+      flush();
+      return;
+    }
+
+    const elapsed = performance.now() - lastDataPushAtRef.current;
+    const waitMs = Math.max(0, PLAYBACK_DATA_PUSH_INTERVAL_MS - elapsed);
+    if (waitMs <= 0) {
+      clearPendingDataPush();
+      flush();
+      return;
+    }
+
+    if (dataPushTimerRef.current === null) {
+      dataPushTimerRef.current = window.setTimeout(() => {
+        dataPushTimerRef.current = null;
+        flush();
+      }, waitMs);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearPendingDataPush();
+      dataPushPendingRef.current = false;
+    };
+  }, []);
 
   const fitMapToTrack = (map: maplibregl.Map, flightPoints: Array<{ lon: number; lat: number }>) => {
     if (flightPoints.length === 0) {
@@ -403,6 +511,17 @@ export function Viewer2D({
       };
     });
   }, [points, mapProvider]);
+
+  const displaySmoothedTrackBase = useMemo<[number, number][]>(() => {
+    if (mapProvider !== "amap") {
+      return smoothedTrack;
+    }
+
+    return smoothedTrack.map(([lon, lat]) => {
+      const converted = wgs84ToGcj02(lon, lat);
+      return [converted.lon, converted.lat];
+    });
+  }, [smoothedTrack, mapProvider]);
 
   const followSnapshot = useMemo<FollowSnapshot2D | null>(() => {
     if (displayPoints.length === 0 || points.length === 0) {
@@ -470,32 +589,29 @@ export function Viewer2D({
       return [];
     }
 
-    let sourceTrack: [number, number][] = smoothedTrack;
-    if (isPlaying && points.length > 1 && smoothedTrack.length > 1) {
+    let sourceTrack: [number, number][] = displaySmoothedTrackBase;
+    if (isPlaying && points.length > 1 && displaySmoothedTrackBase.length > 1) {
       const samplePerSegment = Math.max(
         1,
-        Math.round((smoothedTrack.length - 1) / Math.max(points.length - 1, 1))
+        Math.round((displaySmoothedTrackBase.length - 1) / Math.max(points.length - 1, 1))
       );
       const startOffset = Math.max(
         0,
-        Math.min(smoothedTrack.length - 1, trailRange.startIndex * samplePerSegment)
+        Math.min(displaySmoothedTrackBase.length - 1, trailRange.startIndex * samplePerSegment)
       );
       const endOffset = Math.max(
         startOffset,
-        Math.min(smoothedTrack.length - 1, trailRange.endIndex * samplePerSegment)
+        Math.min(displaySmoothedTrackBase.length - 1, trailRange.endIndex * samplePerSegment)
       );
-      sourceTrack = smoothedTrack.slice(startOffset, endOffset + 1);
+      sourceTrack = displaySmoothedTrackBase.slice(startOffset, endOffset + 1);
     }
 
-    if (mapProvider !== "amap") {
+    if (!isPlaying) {
       return sourceTrack;
     }
 
-    return sourceTrack.map(([lon, lat]) => {
-      const converted = wgs84ToGcj02(lon, lat);
-      return [converted.lon, converted.lat];
-    });
-  }, [smoothedTrack, mapProvider, points, currentIndex, isPlaying]);
+    return downsampleLineVertices(sourceTrack, PLAYBACK_MAX_LINE_VERTICES);
+  }, [displaySmoothedTrackBase, points, currentIndex, isPlaying]);
 
   const pointFeatures = useMemo(() => {
     const result: Array<Record<string, unknown>> = [];
@@ -507,9 +623,12 @@ export function Viewer2D({
     const includeIndexes = new Set<number>();
 
     if (trailRange.endIndex >= 0 && isPlaying) {
-      for (let index = trailRange.startIndex; index <= trailRange.endIndex; index += 1) {
+      const total = Math.max(0, trailRange.endIndex - trailRange.startIndex + 1);
+      const playbackStride = Math.max(1, Math.ceil(total / PLAYBACK_MAX_POINT_FEATURES));
+      for (let index = trailRange.startIndex; index <= trailRange.endIndex; index += playbackStride) {
         includeIndexes.add(index);
       }
+      includeIndexes.add(trailRange.endIndex);
     } else {
       points.forEach((_, index) => {
         if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
@@ -571,11 +690,17 @@ export function Viewer2D({
   useEffect(() => {
     smoothedTrackRef.current = displaySmoothedTrack;
     pointFeaturesRef.current = pointFeatures;
+    if (mapRef.current) {
+      scheduleMapDataPush(mapRef.current, isPlaying);
+    }
+  }, [displaySmoothedTrack, pointFeatures, isPlaying]);
+
+  useEffect(() => {
     pointSizeRef.current = pointSize;
     if (mapRef.current) {
-      syncMapVisuals(mapRef.current);
+      applyPointRadii(mapRef.current);
     }
-  }, [displaySmoothedTrack, pointFeatures, pointSize]);
+  }, [pointSize]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -599,8 +724,8 @@ export function Viewer2D({
 
     map.on("load", () => {
       ensureLayers(map);
-      syncMapVisuals(map);
-      map.once("idle", () => syncMapVisuals(map));
+      applyPointRadii(map);
+      pushMapData(map);
 
       map.on("click", (event) => {
         const features = map.queryRenderedFeatures(event.point, { layers: clickableLayers });
@@ -645,6 +770,8 @@ export function Viewer2D({
     });
 
     return () => {
+      clearPendingDataPush();
+      dataPushPendingRef.current = false;
       cleanupManualFollow?.();
       map.remove();
       mapRef.current = null;
@@ -657,8 +784,8 @@ export function Viewer2D({
       return;
     }
 
-    syncMapVisuals(map);
-    map.once("idle", () => syncMapVisuals(map));
+    applyPointRadii(map);
+    pushMapData(map);
     fitMapToTrack(map, displayPoints);
   }, [displayPoints, points.length, mapProvider, mapStyle]);
 
@@ -858,5 +985,24 @@ export function Viewer2D({
     };
   }, [isPlaying, autoFollowMode, frontFollowMode, points.length, mapProvider, mapStyle]);
 
-  return <div className="viewer-canvas" ref={containerRef} />;
+  return (
+    <div className="viewer-canvas" style={{ position: "relative" }}>
+      <div
+        ref={containerRef}
+        style={{
+          position: "absolute",
+          inset: 0
+        }}
+      />
+
+      <ViewerCornerControls
+        viewMode="2d"
+        autoFollowMode={autoFollowMode}
+        frontFollowMode={frontFollowMode}
+        onAutoFollowChange={setAutoFollowMode}
+        onFrontFollowChange={setFrontFollowMode}
+        onToggleViewMode={onToggleViewMode}
+      />
+    </div>
+  );
 }

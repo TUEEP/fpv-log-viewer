@@ -8,7 +8,7 @@
     "view2d": "2D",
     "view3d": "3D",
     "followMode": "追従",
-    "followAuto": "AUTO",
+    "followAuto": "自動追従",
     "followAutoHint": "再生中に中心追従とズームを自動調整",
     "followFront": "FRONT",
     "followFrontHint": "再生中は進行方向を向き続ける",
@@ -37,7 +37,9 @@
     "next": "次フレーム",
     "speed": "速度",
     "frame": "フレーム",
-    "time": "時間"
+    "time": "時間",
+    "slower": "減速",
+    "faster": "加速"
   },
   "panel": {
     "title": "軌跡ポイント詳細",
@@ -55,9 +57,6 @@
     "noData": "データがありません。"
   },
   "viewer3d": {
-    "perspective": "透視",
-    "top": "俯瞰",
-    "side": "側面",
     "slow": "遅い",
     "fast": "速い"
   }
