@@ -34,10 +34,8 @@ interface TopToolbarProps {
   setLanguage: (language: Language) => void;
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
-  pointSize: number;
-  setPointSize: (size: number) => void;
-  pointStride: number;
-  setPointStride: (stride: number) => void;
+  trackWidth: number;
+  setTrackWidth: (width: number) => void;
   zScale: number;
   setZScale: (scale: number) => void;
   isFullscreen: boolean;
@@ -57,10 +55,8 @@ export function TopToolbar({
   setLanguage,
   theme,
   setTheme,
-  pointSize,
-  setPointSize,
-  pointStride,
-  setPointStride,
+  trackWidth,
+  setTrackWidth,
   zScale,
   setZScale,
   isFullscreen,
@@ -89,13 +85,29 @@ export function TopToolbar({
       >
         <Typography variant="h6">{t("app.title")}</Typography>
 
-        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
-          <UploadButton label={t("toolbar.upload")} onFileSelected={onUpload} />
-          <FullscreenButton
-            label={t("toolbar.fullscreen")}
-            isFullscreen={isFullscreen}
-            onToggle={onToggleFullscreen}
-          />
+        <Stack
+          direction="row"
+          spacing={1}
+          useFlexGap
+          flexWrap="wrap"
+          alignItems="center"
+          justifyContent={{ xs: "space-between", sm: "flex-end" }}
+          sx={{ width: { xs: "100%", md: "auto" } }}
+        >
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+            <UploadButton label={t("toolbar.upload")} onFileSelected={onUpload} />
+            <FullscreenButton
+              label={t("toolbar.fullscreen")}
+              isFullscreen={isFullscreen}
+              onToggle={onToggleFullscreen}
+            />
+            <LanguageSelect
+              value={language}
+              onChange={setLanguage}
+              compact
+              ariaLabel={t("toolbar.language")}
+            />
+          </Stack>
           <ThemeToggle
             value={theme}
             darkLabel={t("toolbar.dark")}
@@ -157,46 +169,20 @@ export function TopToolbar({
           </Select>
         </Box>
 
-        <Box>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-            {t("toolbar.language")}
-          </Typography>
-          <LanguageSelect value={language} onChange={setLanguage} />
-        </Box>
-
         <Box sx={{ width: { xs: 130, sm: 146 } }}>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-            {t("toolbar.pointSize")}: {pointSize.toFixed(1)}
+            {t("toolbar.trackWidth")}: {trackWidth.toFixed(1)}
           </Typography>
           <Slider
             size="small"
             min={0.4}
             max={3}
             step={0.1}
-            value={pointSize}
+            value={trackWidth}
             valueLabelDisplay="auto"
             onChange={(_, value) => {
               if (typeof value === "number") {
-                setPointSize(value);
-              }
-            }}
-          />
-        </Box>
-
-        <Box sx={{ width: { xs: 130, sm: 146 } }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-            {t("toolbar.pointStride")}: {pointStride}
-          </Typography>
-          <Slider
-            size="small"
-            min={1}
-            max={10}
-            step={1}
-            value={pointStride}
-            valueLabelDisplay="auto"
-            onChange={(_, value) => {
-              if (typeof value === "number") {
-                setPointStride(value);
+                setTrackWidth(value);
               }
             }}
           />

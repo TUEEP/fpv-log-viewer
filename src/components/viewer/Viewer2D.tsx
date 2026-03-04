@@ -17,8 +17,7 @@ interface Viewer2DProps {
   frontFollowMode: boolean;
   mapProvider: MapProvider;
   mapStyle: MapStyleMode;
-  pointSize: number;
-  pointStride: number;
+  trackWidth: number;
   setAutoFollowMode: (enabled: boolean) => void;
   setFrontFollowMode: (enabled: boolean) => void;
   onToggleViewMode: () => void;
@@ -517,8 +516,7 @@ export function Viewer2D({
   frontFollowMode,
   mapProvider,
   mapStyle,
-  pointSize,
-  pointStride: _pointStride,
+  trackWidth,
   setAutoFollowMode,
   setFrontFollowMode,
   onToggleViewMode,
@@ -531,7 +529,7 @@ export function Viewer2D({
   const trackOuterGradientRef = useRef<any>(TRACK_OUTER_GRADIENT_FALLBACK);
   const trackInnerGradientRef = useRef<any>(TRACK_INNER_GRADIENT_FALLBACK);
   const pointFeaturesRef = useRef<Array<Record<string, unknown>>>([]);
-  const pointSizeRef = useRef(pointSize);
+  const trackWidthRef = useRef(trackWidth);
   const manualFollowUntilRef = useRef(0);
   const lastDataPushAtRef = useRef(0);
   const dataPushTimerRef = useRef<number | null>(null);
@@ -612,14 +610,14 @@ export function Viewer2D({
     try {
       map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-gradient", trackOuterGradientRef.current);
       map.setPaintProperty(LAYER_SMOOTH_INNER, "line-gradient", trackInnerGradientRef.current);
-      map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-width", 5.8 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_SMOOTH_INNER, "line-width", 2.9 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.2 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_START, "circle-radius", 4.1 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_END, "circle-radius", 4.1 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_CURRENT, "circle-radius", 3.3 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_CURRENT_RING, "circle-stroke-width", 1.7 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 4.8 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-width", 5.8 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_INNER, "line-width", 2.9 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.2 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_START, "circle-radius", 4.1 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_END, "circle-radius", 4.1 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_CURRENT, "circle-radius", 3.3 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_CURRENT_RING, "circle-stroke-width", 1.7 * trackWidthRef.current);
+      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 4.8 * trackWidthRef.current);
       clearPendingPointRadiiRetry();
     } catch {
       schedulePointRadiiRetry(map);
@@ -634,7 +632,7 @@ export function Viewer2D({
     try {
       const phase = nowMs * 0.0062;
       const wave = 0.5 + 0.5 * Math.sin(phase);
-      const radius = (6.2 + wave * 3.6) * pointSizeRef.current;
+      const radius = (6.2 + wave * 3.6) * trackWidthRef.current;
       const strokeOpacity = 0.2 + (1 - wave) * 0.58;
       map.setPaintProperty(LAYER_CURRENT_RING, "circle-radius", radius);
       map.setPaintProperty(LAYER_CURRENT_RING, "circle-stroke-opacity", strokeOpacity);
@@ -1048,11 +1046,11 @@ export function Viewer2D({
   }, [trackStyleData, pointFeatures, isPlaying]);
 
   useEffect(() => {
-    pointSizeRef.current = pointSize;
+    trackWidthRef.current = trackWidth;
     if (mapRef.current) {
       applyPointRadii(mapRef.current);
     }
-  }, [pointSize]);
+  }, [trackWidth]);
 
   useEffect(() => {
     const container = containerRef.current;

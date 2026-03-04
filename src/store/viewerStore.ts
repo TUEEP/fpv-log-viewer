@@ -42,8 +42,7 @@ interface ViewerState {
   altitudeMode: AltitudeMode;
   theme: ThemeMode;
   language: Language;
-  pointSize: number;
-  pointStride: number;
+  trackWidth: number;
   zScale: number;
   autoFollowMode: boolean;
   frontFollowMode: boolean;
@@ -63,8 +62,7 @@ interface ViewerState {
   setAltitudeMode: (mode: AltitudeMode) => void;
   setTheme: (mode: ThemeMode) => void;
   setLanguage: (language: Language) => void;
-  setPointSize: (size: number) => void;
-  setPointStride: (stride: number) => void;
+  setTrackWidth: (width: number) => void;
   setZScale: (scale: number) => void;
   setAutoFollowMode: (enabled: boolean) => void;
   setFrontFollowMode: (enabled: boolean) => void;
@@ -87,8 +85,7 @@ export const useViewerStore = create<ViewerState>((set) => ({
   altitudeMode: "alt1",
   theme: "dark",
   language: detectInitialLanguage(),
-  pointSize: 1,
-  pointStride: 1,
+  trackWidth: 1,
   zScale: 5,
   autoFollowMode: false,
   frontFollowMode: false,
@@ -204,8 +201,7 @@ export const useViewerStore = create<ViewerState>((set) => ({
   setAltitudeMode: (mode) => set(() => ({ altitudeMode: mode })),
   setTheme: (mode) => set(() => ({ theme: mode })),
   setLanguage: (language) => set(() => ({ language })),
-  setPointSize: (size) => set(() => ({ pointSize: Math.max(0.4, Math.min(3, size)) })),
-  setPointStride: (stride) => set(() => ({ pointStride: Math.max(1, Math.min(10, stride)) })),
+  setTrackWidth: (width) => set(() => ({ trackWidth: Math.max(0.4, Math.min(3, width)) })),
   setZScale: (scale) => set(() => ({ zScale: Math.max(0.5, Math.min(20, scale)) })),
   setAutoFollowMode: (enabled) => set(() => ({ autoFollowMode: enabled })),
   setFrontFollowMode: (enabled) => set(() => ({ frontFollowMode: enabled })),

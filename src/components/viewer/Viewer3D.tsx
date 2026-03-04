@@ -31,8 +31,7 @@ interface Viewer3DProps {
   isPlaying: boolean;
   autoFollowMode: boolean;
   frontFollowMode: boolean;
-  pointSize: number;
-  pointStride: number;
+  trackWidth: number;
   setAutoFollowMode: (enabled: boolean) => void;
   setFrontFollowMode: (enabled: boolean) => void;
   onToggleViewMode: () => void;
@@ -605,17 +604,17 @@ function markerColor(marker: MarkerData): string {
   return "#7fd9e7";
 }
 
-function markerRadius(marker: MarkerData, pointSize: number): number {
+function markerRadius(marker: MarkerData, trackWidth: number): number {
   if (marker.isCurrent) {
-    return 1.22 * pointSize;
+    return 1.22 * trackWidth;
   }
   if (marker.isSelected) {
-    return 1.55 * pointSize;
+    return 1.55 * trackWidth;
   }
   if (marker.role === "start" || marker.role === "end") {
-    return 1.35 * pointSize;
+    return 1.35 * trackWidth;
   }
-  return 1.02 * pointSize;
+  return 1.02 * trackWidth;
 }
 
 function buildTilePlanes(
@@ -1025,15 +1024,15 @@ function AutoFollowRig({
 
 function CurrentPulseRing({
   position,
-  pointSize
+  trackWidth
 }: {
   position: [number, number, number];
-  pointSize: number;
+  trackWidth: number;
 }) {
   const meshRef = useRef<THREE.Mesh | null>(null);
   const materialRef = useRef<THREE.MeshBasicMaterial | null>(null);
-  const baseRadius = Math.max(1.4, pointSize * 2.25);
-  const tubeRadius = Math.max(0.16, pointSize * 0.28);
+  const baseRadius = Math.max(1.4, trackWidth * 2.25);
+  const tubeRadius = Math.max(0.16, trackWidth * 0.28);
 
   useFrame((state) => {
     const mesh = meshRef.current;
@@ -1079,8 +1078,7 @@ export function Viewer3D({
   isPlaying,
   autoFollowMode,
   frontFollowMode,
-  pointSize,
-  pointStride: _pointStride,
+  trackWidth,
   setAutoFollowMode,
   setFrontFollowMode,
   onToggleViewMode,
@@ -1737,7 +1735,7 @@ export function Viewer3D({
             <Line
               points={cometLineData.points}
               vertexColors={cometLineData.outerColors}
-              lineWidth={Math.max(2.8, pointSize * 3.2)}
+              lineWidth={Math.max(2.8, trackWidth * 3.2)}
               worldUnits
               transparent
               depthWrite={false}
@@ -1745,7 +1743,7 @@ export function Viewer3D({
             <Line
               points={cometLineData.points}
               vertexColors={cometLineData.innerColors}
-              lineWidth={Math.max(1.15, pointSize * 1.45)}
+              lineWidth={Math.max(1.15, trackWidth * 1.45)}
               worldUnits
               transparent
               depthWrite={false}
@@ -1766,7 +1764,7 @@ export function Viewer3D({
         {currentMarker ? (
           <CurrentPulseRing
             position={currentMarker.position}
-            pointSize={pointSize}
+            trackWidth={trackWidth}
           />
         ) : null}
 
@@ -1779,7 +1777,7 @@ export function Viewer3D({
               onSelect(marker.index);
             }}
           >
-            <sphereGeometry args={[markerRadius(marker, pointSize), 14, 14]} />
+            <sphereGeometry args={[markerRadius(marker, trackWidth), 14, 14]} />
             <meshStandardMaterial
               color={markerColor(marker)}
               emissive={marker.isCurrent ? "#715610" : marker.isSelected ? "#6f7a84" : "#000000"}

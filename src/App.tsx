@@ -28,8 +28,7 @@ export default function App() {
   const altitudeMode = useViewerStore((state) => state.altitudeMode);
   const language = useViewerStore((state) => state.language);
   const theme = useViewerStore((state) => state.theme);
-  const pointSize = useViewerStore((state) => state.pointSize);
-  const pointStride = useViewerStore((state) => state.pointStride);
+  const trackWidth = useViewerStore((state) => state.trackWidth);
   const zScale = useViewerStore((state) => state.zScale);
   const autoFollowMode = useViewerStore((state) => state.autoFollowMode);
   const frontFollowMode = useViewerStore((state) => state.frontFollowMode);
@@ -48,8 +47,7 @@ export default function App() {
   const setAltitudeMode = useViewerStore((state) => state.setAltitudeMode);
   const setTheme = useViewerStore((state) => state.setTheme);
   const setLanguage = useViewerStore((state) => state.setLanguage);
-  const setPointSize = useViewerStore((state) => state.setPointSize);
-  const setPointStride = useViewerStore((state) => state.setPointStride);
+  const setTrackWidth = useViewerStore((state) => state.setTrackWidth);
   const setZScale = useViewerStore((state) => state.setZScale);
   const setAutoFollowMode = useViewerStore((state) => state.setAutoFollowMode);
   const setFrontFollowMode = useViewerStore((state) => state.setFrontFollowMode);
@@ -176,10 +174,8 @@ export default function App() {
           setLanguage={setLanguage}
           theme={theme}
           setTheme={setTheme}
-          pointSize={pointSize}
-          setPointSize={setPointSize}
-          pointStride={pointStride}
-          setPointStride={setPointStride}
+          trackWidth={trackWidth}
+          setTrackWidth={setTrackWidth}
           zScale={zScale}
           setZScale={setZScale}
           isFullscreen={isFullscreen}
@@ -220,8 +216,7 @@ export default function App() {
                 frontFollowMode={frontFollowMode}
                 mapProvider={mapProvider}
                 mapStyle={mapStyle}
-                pointSize={pointSize}
-                pointStride={pointStride}
+                trackWidth={trackWidth}
                 setAutoFollowMode={setAutoFollowMode}
                 setFrontFollowMode={setFrontFollowMode}
                 onToggleViewMode={() => setViewMode("3d")}
@@ -240,8 +235,7 @@ export default function App() {
                 isPlaying={playback.isPlaying}
                 autoFollowMode={autoFollowMode}
                 frontFollowMode={frontFollowMode}
-                pointSize={pointSize}
-                pointStride={pointStride}
+                trackWidth={trackWidth}
                 setAutoFollowMode={setAutoFollowMode}
                 setFrontFollowMode={setFrontFollowMode}
                 onToggleViewMode={() => setViewMode("2d")}
