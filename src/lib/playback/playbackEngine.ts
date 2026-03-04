@@ -65,3 +65,24 @@ export function advancePlaybackIndex(
 ): number {
   return advancePlaybackByDelta(points, currentIndex, elapsedMs, speed, 0).nextIndex;
 }
+
+export function resolvePlaybackCursor(
+  points: FlightPoint[],
+  currentIndex: number,
+  carryMs: number
+): number {
+  if (points.length <= 1) {
+    return Math.max(0, Math.min(points.length - 1, currentIndex));
+  }
+
+  const clampedIndex = Math.max(0, Math.min(points.length - 1, currentIndex));
+  if (clampedIndex >= points.length - 1) {
+    return clampedIndex;
+  }
+
+  const currentTs = points[clampedIndex]?.timestampMs;
+  const nextTs = points[clampedIndex + 1]?.timestampMs;
+  const deltaMs = Math.max(1, (nextTs ?? currentTs ?? 0) - (currentTs ?? 0));
+  const alpha = Math.max(0, Math.min(0.999999, carryMs / deltaMs));
+  return clampedIndex + alpha;
+}

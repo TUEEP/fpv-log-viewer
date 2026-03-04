@@ -9,6 +9,7 @@ import { PointDetailPanel } from "./components/sidebar/PointDetailPanel";
 import { PlaybackBar } from "./components/playback/PlaybackBar";
 import { parseEdgeTxCsv } from "./lib/csv/parseEdgeTxCsv";
 import { buildSmoothedTrack } from "./lib/math/smoothPath";
+import { resolvePlaybackCursor } from "./lib/playback/playbackEngine";
 import { playbackSpeedOptions, useViewerStore } from "./store/viewerStore";
 import { createAppTheme } from "./theme/muiTheme";
 
@@ -33,6 +34,7 @@ export default function App() {
   const autoFollowMode = useViewerStore((state) => state.autoFollowMode);
   const frontFollowMode = useViewerStore((state) => state.frontFollowMode);
   const isFullscreen = useViewerStore((state) => state.isFullscreen);
+  const playbackCarryMs = useViewerStore((state) => state.playbackCarryMs);
 
   const setData = useViewerStore((state) => state.setData);
   const setSelectedIndex = useViewerStore((state) => state.setSelectedIndex);
@@ -54,7 +56,14 @@ export default function App() {
   const setIsFullscreen = useViewerStore((state) => state.setIsFullscreen);
 
   const smoothedTrack = useMemo(() => buildSmoothedTrack(points, 0.2, 10), [points]);
-  const activeDetailPoint = points[selectedIndex] ?? points[playback.currentIndex] ?? null;
+  const playbackCursor = useMemo(() => {
+    if (!playback.isPlaying) {
+      return playback.currentIndex;
+    }
+    return resolvePlaybackCursor(points, playback.currentIndex, playbackCarryMs);
+  }, [points, playback.currentIndex, playback.isPlaying, playbackCarryMs]);
+  const selectedIndexForView = playback.isPlaying ? playback.currentIndex : selectedIndex;
+  const activeDetailPoint = points[selectedIndexForView] ?? points[playback.currentIndex] ?? null;
   const muiTheme = useMemo(() => createAppTheme(theme), [theme]);
 
   useEffect(() => {
@@ -87,12 +96,6 @@ export default function App() {
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
   }, [playback.isPlaying, playback.speed, points.length, advancePlayback]);
-
-  useEffect(() => {
-    if (playback.isPlaying) {
-      setSelectedIndex(playback.currentIndex);
-    }
-  }, [playback.currentIndex, playback.isPlaying, setSelectedIndex]);
 
   const handleUpload = async (file: File) => {
     setIsLoading(true);
@@ -209,8 +212,9 @@ export default function App() {
               <Viewer2D
                 points={points}
                 smoothedTrack={smoothedTrack}
-                selectedIndex={selectedIndex}
+                selectedIndex={selectedIndexForView}
                 currentIndex={playback.currentIndex}
+                playbackCursor={playbackCursor}
                 isPlaying={playback.isPlaying}
                 autoFollowMode={autoFollowMode}
                 frontFollowMode={frontFollowMode}
@@ -230,8 +234,9 @@ export default function App() {
                 mapProvider={mapProvider}
                 mapStyle={mapStyle}
                 zScale={zScale}
-                selectedIndex={selectedIndex}
+                selectedIndex={selectedIndexForView}
                 currentIndex={playback.currentIndex}
+                playbackCursor={playbackCursor}
                 isPlaying={playback.isPlaying}
                 autoFollowMode={autoFollowMode}
                 frontFollowMode={frontFollowMode}

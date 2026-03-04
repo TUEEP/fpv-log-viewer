@@ -10,12 +10,12 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { Line, OrbitControls } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildTileUrl, getRasterTileConfig } from "../../lib/map/rasterTiles";
-import { resolveTrailRange } from "../../lib/playback/trailWindow";
+import { resolveTrailCursorRange } from "../../lib/playback/trailWindow";
 import type { AltitudeMode, FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 import { ViewerCornerControls } from "./ViewerCornerControls";
 
@@ -27,6 +27,7 @@ interface Viewer3DProps {
   zScale: number;
   selectedIndex: number;
   currentIndex: number;
+  playbackCursor: number;
   isPlaying: boolean;
   autoFollowMode: boolean;
   frontFollowMode: boolean;
@@ -60,6 +61,12 @@ interface MarkerData {
   isCurrent: boolean;
   isSelected: boolean;
   position: [number, number, number];
+}
+
+interface CometLineData {
+  points: Array<[number, number, number]>;
+  outerColors: Array<[number, number, number, number]>;
+  innerColors: Array<[number, number, number, number]>;
 }
 
 interface TilePlaneData {
@@ -119,6 +126,9 @@ const FOG_COLOR = SKY_HORIZON_COLOR;
 const GROUND_HAZE_INNER_COLOR = "#4b6477";
 const GROUND_HAZE_OUTER_COLOR = "#7f99ac";
 const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
+const PLAYBACK_MAX_LINE_VERTICES = 900;
+const PLAYBACK_SMOOTH_SAMPLES_PER_SEGMENT = 4;
+const PLAYBACK_SMOOTH_TENSION = 0.2;
 const FOLLOW_LOOK_AHEAD_DEFAULT_MS = 1400;
 const FOLLOW_LOOK_AHEAD_MIN_MS = 700;
 const FOLLOW_LOOK_AHEAD_MAX_MS = 3200;
@@ -402,46 +412,208 @@ function pickFallbackSpeedKmh(
   }
 
   const horizontalDistM = Math.hypot(endLocal.x - startLocal.x, endLocal.y - startLocal.y);
-  const speedKmh = (horizontalDistM / dtMs) * 3.6;
+  const speedKmh = (horizontalDistM / (dtMs / 1000)) * 3.6;
   return Number.isFinite(speedKmh) ? speedKmh : 0;
 }
 
-function speedColor(speed: number, minSpeed: number, maxSpeed: number): THREE.Color {
-  const slow = new THREE.Color("#2f77ff");
-  const fast = new THREE.Color("#ff3f2c");
-  if (maxSpeed - minSpeed < 0.001) {
-    return slow.clone().lerp(fast, 0.5);
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) {
+    return 0;
   }
 
-  const t = clamp((speed - minSpeed) / (maxSpeed - minSpeed), 0, 1);
-  return slow.clone().lerp(fast, t);
+  const clampedP = clamp(p, 0, 1);
+  if (sorted.length === 1) {
+    return sorted[0];
+  }
+
+  const idx = clampedP * (sorted.length - 1);
+  const lower = Math.floor(idx);
+  const upper = Math.ceil(idx);
+  const alpha = idx - lower;
+  const lowerValue = sorted[lower] ?? sorted[0];
+  const upperValue = sorted[upper] ?? sorted[sorted.length - 1];
+  return lowerValue + (upperValue - lowerValue) * alpha;
+}
+
+const SPEED_COLOR_SLOW = new THREE.Color("#6f8cff");
+const SPEED_COLOR_MID = new THREE.Color("#6ecdb9");
+const SPEED_COLOR_FAST = new THREE.Color("#ffc07a");
+
+function speedColorFromNormalized(normalizedSpeed: number): THREE.Color {
+  const t = clamp(normalizedSpeed, 0, 1);
+  if (t <= 0.58) {
+    return SPEED_COLOR_SLOW.clone().lerp(SPEED_COLOR_MID, t / 0.58);
+  }
+  return SPEED_COLOR_MID.clone().lerp(SPEED_COLOR_FAST, (t - 0.58) / 0.42);
+}
+
+function interpolateLocalTrackPoint(
+  from: LocalTrackPoint,
+  to: LocalTrackPoint,
+  tRaw: number
+): LocalTrackPoint {
+  const t = clamp(tRaw, 0, 1);
+  return {
+    index: from.index,
+    x: from.x + (to.x - from.x) * t,
+    y: from.y + (to.y - from.y) * t,
+    z: from.z + (to.z - from.z) * t
+  };
+}
+
+function downsampleLineVertices3D(
+  track: Array<[number, number, number]>,
+  maxVertices: number
+): Array<[number, number, number]> {
+  if (track.length <= maxVertices || maxVertices < 2) {
+    return track;
+  }
+
+  const result: Array<[number, number, number]> = [];
+  const lastIndex = track.length - 1;
+  const step = lastIndex / (maxVertices - 1);
+  for (let i = 0; i < maxVertices; i += 1) {
+    const sourceIndex = Math.min(lastIndex, Math.round(i * step));
+    const coord = track[sourceIndex];
+    if (!coord) {
+      continue;
+    }
+    if (
+      result.length === 0 ||
+      result[result.length - 1]![0] !== coord[0] ||
+      result[result.length - 1]![1] !== coord[1] ||
+      result[result.length - 1]![2] !== coord[2]
+    ) {
+      result.push(coord);
+    }
+  }
+
+  const first = track[0];
+  const last = track[lastIndex];
+  if (result.length === 0 || result[0] !== first) {
+    result.unshift(first);
+  }
+  if (result[result.length - 1] !== last) {
+    result.push(last);
+  }
+
+  return result;
+}
+
+function catmullRom3(
+  p0: [number, number, number],
+  p1: [number, number, number],
+  p2: [number, number, number],
+  p3: [number, number, number],
+  t: number
+): [number, number, number] {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return [
+    0.5 *
+      ((2 * p1[0]) +
+        (-p0[0] + p2[0]) * t +
+        (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 +
+        (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
+    0.5 *
+      ((2 * p1[1]) +
+        (-p0[1] + p2[1]) * t +
+        (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 +
+        (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3),
+    0.5 *
+      ((2 * p1[2]) +
+        (-p0[2] + p2[2]) * t +
+        (2 * p0[2] - 5 * p1[2] + 4 * p2[2] - p3[2]) * t2 +
+        (-p0[2] + 3 * p1[2] - 3 * p2[2] + p3[2]) * t3)
+  ];
+}
+
+function lerp3(
+  a: [number, number, number],
+  b: [number, number, number],
+  tRaw: number
+): [number, number, number] {
+  const t = clamp(tRaw, 0, 1);
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t
+  ];
+}
+
+function buildSmoothedPolylineWithColors(
+  points: Array<[number, number, number]>,
+  colors: Array<[number, number, number, number]>,
+  samplesPerSegment: number,
+  tension: number
+): { points: Array<[number, number, number]>; colors: Array<[number, number, number, number]> } {
+  const segmentCount = points.length - 1;
+  if (segmentCount <= 0) {
+    return { points, colors: [] };
+  }
+
+  const smoothFactor = clamp(1 - tension, 0, 1);
+  if (samplesPerSegment <= 1 || points.length <= 2 || smoothFactor <= 0) {
+    const nextColors: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < segmentCount; i += 1) {
+      const color = colors[i] ?? colors[colors.length - 1] ?? [0.5, 0.5, 0.5, 1];
+      nextColors.push(color);
+    }
+    nextColors.push(nextColors[nextColors.length - 1] ?? [0.5, 0.5, 0.5, 1]);
+    return { points, colors: nextColors };
+  }
+
+  const nextPoints: Array<[number, number, number]> = [];
+  const nextColors: Array<[number, number, number, number]> = [];
+  for (let i = 0; i < segmentCount; i += 1) {
+    const p0 = points[Math.max(0, i - 1)] ?? points[0];
+    const p1 = points[i] ?? points[0];
+    const p2 = points[i + 1] ?? p1;
+    const p3 = points[Math.min(points.length - 1, i + 2)] ?? p2;
+    const color = colors[i] ?? colors[colors.length - 1] ?? [0.5, 0.5, 0.5, 1];
+
+    for (let j = 0; j < samplesPerSegment; j += 1) {
+      const t = j / samplesPerSegment;
+      const smooth = catmullRom3(p0, p1, p2, p3, t);
+      const linear = lerp3(p1, p2, t);
+      nextPoints.push(lerp3(linear, smooth, smoothFactor));
+      nextColors.push(color);
+    }
+  }
+
+  nextPoints.push(points[points.length - 1] ?? points[0]!);
+  nextColors.push(nextColors[nextColors.length - 1] ?? colors[colors.length - 1] ?? [0.5, 0.5, 0.5, 1]);
+  return {
+    points: nextPoints,
+    colors: nextColors
+  };
 }
 
 function markerColor(marker: MarkerData): string {
   if (marker.isCurrent) {
-    return "#ffe164";
+    return "#ffe39a";
   }
   if (marker.isSelected) {
-    return "#ffffff";
+    return "#f7fbff";
   }
   if (marker.role === "start") {
-    return "#42d26f";
+    return "#53d584";
   }
   if (marker.role === "end") {
-    return "#ff6058";
+    return "#ff8b7f";
   }
-  return "#86d9ff";
+  return "#7fd9e7";
 }
 
 function markerRadius(marker: MarkerData, pointSize: number): number {
   if (marker.isCurrent) {
-    return 1.9 * pointSize;
+    return 1.22 * pointSize;
   }
   if (marker.isSelected) {
-    return 1.7 * pointSize;
+    return 1.55 * pointSize;
   }
   if (marker.role === "start" || marker.role === "end") {
-    return 1.45 * pointSize;
+    return 1.35 * pointSize;
   }
   return 1.02 * pointSize;
 }
@@ -851,6 +1023,50 @@ function AutoFollowRig({
   return null;
 }
 
+function CurrentPulseRing({
+  position,
+  pointSize
+}: {
+  position: [number, number, number];
+  pointSize: number;
+}) {
+  const meshRef = useRef<THREE.Mesh | null>(null);
+  const materialRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  const baseRadius = Math.max(1.4, pointSize * 2.25);
+  const tubeRadius = Math.max(0.16, pointSize * 0.28);
+
+  useFrame((state) => {
+    const mesh = meshRef.current;
+    const material = materialRef.current;
+    if (!mesh || !material) {
+      return;
+    }
+
+    const wave = 0.5 + 0.5 * Math.sin(state.clock.elapsedTime * 5.2);
+    const scale = 1 + 0.22 * wave;
+    mesh.scale.setScalar(scale);
+    material.opacity = 0.24 + (1 - wave) * 0.62;
+  });
+
+  return (
+    <mesh
+      ref={meshRef}
+      position={[position[0], position[1], position[2] + 0.22]}
+      renderOrder={9}
+    >
+      <torusGeometry args={[baseRadius, tubeRadius, 14, 56]} />
+      <meshBasicMaterial
+        ref={materialRef}
+        color="#ffe082"
+        transparent
+        opacity={0.68}
+        depthWrite={false}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
 export function Viewer3D({
   points,
   altitudeMode,
@@ -859,11 +1075,12 @@ export function Viewer3D({
   zScale,
   selectedIndex,
   currentIndex,
+  playbackCursor,
   isPlaying,
   autoFollowMode,
   frontFollowMode,
   pointSize,
-  pointStride,
+  pointStride: _pointStride,
   setAutoFollowMode,
   setFrontFollowMode,
   onToggleViewMode,
@@ -905,9 +1122,14 @@ export function Viewer3D({
 
   const tileConfig = useMemo(() => getRasterTileConfig(mapProvider, mapStyle), [mapProvider, mapStyle]);
 
-  const trailRange = useMemo(
-    () => resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS),
-    [points, currentIndex, isPlaying]
+  const clampedPlaybackCursor = useMemo(
+    () => clamp(playbackCursor, 0, Math.max(points.length - 1, 0)),
+    [playbackCursor, points.length]
+  );
+
+  const trailCursorRange = useMemo(
+    () => resolveTrailCursorRange(points, clampedPlaybackCursor, isPlaying, PLAYBACK_TRAIL_WINDOW_MS),
+    [points, clampedPlaybackCursor, isPlaying]
   );
 
   const sceneData = useMemo<SceneData>(() => {
@@ -979,17 +1201,69 @@ export function Viewer3D({
     zScale
   ]);
 
+  const baseSegmentSpeeds = useMemo<number[]>(() => {
+    const maxSegmentIndex = Math.min(displayGeoPoints.length, sceneData.localTrackPoints.length) - 1;
+    if (maxSegmentIndex <= 0) {
+      return [];
+    }
+
+    const speeds: number[] = [];
+    for (let i = 0; i < maxSegmentIndex; i += 1) {
+      const current = displayGeoPoints[i];
+      const next = displayGeoPoints[i + 1];
+      const currentLocal = sceneData.localTrackPoints[i];
+      const nextLocal = sceneData.localTrackPoints[i + 1];
+      if (!current || !next || !currentLocal || !nextLocal) {
+        speeds.push(0);
+        continue;
+      }
+
+      const speedFromCsv =
+        typeof current.speedKmh === "number" && Number.isFinite(current.speedKmh)
+          ? current.speedKmh
+          : typeof next.speedKmh === "number" && Number.isFinite(next.speedKmh)
+            ? next.speedKmh
+            : null;
+      const speed = speedFromCsv ?? pickFallbackSpeedKmh(current, next, currentLocal, nextLocal);
+      speeds.push(Math.max(0, speed));
+    }
+
+    return speeds;
+  }, [displayGeoPoints, sceneData.localTrackPoints]);
+
+  const speedScale = useMemo(() => {
+    if (baseSegmentSpeeds.length === 0) {
+      return { min: 0, max: 1 };
+    }
+
+    const sorted = [...baseSegmentSpeeds].sort((a, b) => a - b);
+    const robustMin = percentile(sorted, 0.1);
+    const robustMax = percentile(sorted, 0.9);
+    const min = Number.isFinite(robustMin) ? robustMin : sorted[0] ?? 0;
+    const max = Math.max(
+      min + 0.001,
+      Number.isFinite(robustMax) ? robustMax : sorted[sorted.length - 1] ?? min + 0.001
+    );
+    return { min, max };
+  }, [baseSegmentSpeeds]);
+
   const followSnapshot = useMemo<FollowSnapshot3D | null>(() => {
     const localTrackPoints = sceneData.localTrackPoints;
     if (localTrackPoints.length === 0 || points.length === 0) {
       return null;
     }
 
-    const index = Math.max(0, Math.min(points.length - 1, currentIndex));
-    const current = localTrackPoints[index];
-    if (!current) {
+    const clampedCursor = clamp(clampedPlaybackCursor, 0, points.length - 1);
+    const index = Math.floor(clampedCursor);
+    const currentBase = localTrackPoints[index];
+    if (!currentBase) {
       return null;
     }
+    const cursorAlpha = clampedCursor - index;
+    const current =
+      cursorAlpha > 1e-6 && localTrackPoints[index + 1]
+        ? interpolateLocalTrackPoint(currentBase, localTrackPoints[index + 1]!, cursorAlpha)
+        : currentBase;
 
     let speedMps = 0;
     const speedKmh = points[index]?.speedKmh;
@@ -1042,25 +1316,34 @@ export function Viewer3D({
       turnRateDegPerSec,
       lookAheadMs
     };
-  }, [sceneData.localTrackPoints, points, currentIndex]);
+  }, [sceneData.localTrackPoints, points, clampedPlaybackCursor]);
 
   const markers = useMemo<MarkerData[]>(() => {
     if (sceneData.localTrackPoints.length === 0) {
       return [];
     }
 
-    const includeIndexes = new Set<number>();
-    if (isPlaying && trailRange.endIndex >= 0) {
-      for (let index = trailRange.startIndex; index <= trailRange.endIndex; index += 1) {
-        includeIndexes.add(index);
+    const clampedCursor = clamp(clampedPlaybackCursor, 0, Math.max(sceneData.localTrackPoints.length - 1, 0));
+    const cursorIndex = Math.floor(clampedCursor);
+    const cursorAlpha = clampedCursor - cursorIndex;
+    const interpolatedCurrentPoint = (() => {
+      const from = sceneData.localTrackPoints[cursorIndex];
+      if (!from) {
+        return null;
       }
-    } else {
-      points.forEach((_, index) => {
-        if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
-          includeIndexes.add(index);
-        }
-      });
-    }
+      if (cursorAlpha <= 1e-6 || cursorIndex >= sceneData.localTrackPoints.length - 1) {
+        return from;
+      }
+      const to = sceneData.localTrackPoints[cursorIndex + 1];
+      if (!to) {
+        return from;
+      }
+      return interpolateLocalTrackPoint(from, to, cursorAlpha);
+    })();
+
+    const includeIndexes = new Set<number>();
+    includeIndexes.add(0);
+    includeIndexes.add(points.length - 1);
 
     if (selectedIndex >= 0 && selectedIndex < points.length) {
       includeIndexes.add(selectedIndex);
@@ -1071,117 +1354,175 @@ export function Viewer3D({
 
     const nextMarkers: MarkerData[] = [];
     includeIndexes.forEach((index) => {
-      if (isPlaying && trailRange.endIndex >= 0) {
-        if (index < trailRange.startIndex || index > trailRange.endIndex) {
-          return;
-        }
-      }
-
       const point = sceneData.localTrackPoints[index];
       if (!point) {
         return;
       }
 
+      const isCurrent = index === currentIndex;
+      const markerPoint =
+        isCurrent && interpolatedCurrentPoint ? interpolatedCurrentPoint : point;
+
       nextMarkers.push({
         index,
         role: index === 0 ? "start" : index === points.length - 1 ? "end" : "middle",
-        isCurrent: index === currentIndex,
+        isCurrent,
         isSelected: index === selectedIndex,
-        position: [point.x, point.y, point.z]
+        position: [markerPoint.x, markerPoint.y, markerPoint.z]
       });
     });
 
     return nextMarkers;
   }, [
     sceneData.localTrackPoints,
+    clampedPlaybackCursor,
     points,
-    pointStride,
     selectedIndex,
-    currentIndex,
-    isPlaying,
-    trailRange.startIndex,
-    trailRange.endIndex
+    currentIndex
   ]);
 
-  const speedGeometry = useMemo(() => {
-    const pointCount = sceneData.localTrackPoints.length;
-    if (pointCount <= 1 || displayGeoPoints.length <= 1) {
+  const currentMarker = useMemo(
+    () => markers.find((marker) => marker.isCurrent) ?? null,
+    [markers]
+  );
+
+  const cometLineData = useMemo<CometLineData | null>(() => {
+    const localTrackPoints = sceneData.localTrackPoints;
+    const pointCount = localTrackPoints.length;
+    if (pointCount <= 1 || displayGeoPoints.length <= 1 || baseSegmentSpeeds.length === 0) {
       return null;
     }
 
     const maxSegmentIndex = Math.min(pointCount, displayGeoPoints.length) - 1;
-    const startIndex = isPlaying && trailRange.endIndex >= 0 ? trailRange.startIndex : 0;
-    const endIndex = isPlaying && trailRange.endIndex >= 0 ? trailRange.endIndex : maxSegmentIndex;
-    const segmentCount = Math.max(0, Math.min(endIndex, maxSegmentIndex) - startIndex);
-    if (segmentCount <= 0) {
+    if (maxSegmentIndex <= 0) {
       return null;
     }
 
-    const segmentSpeeds: number[] = [];
-    for (let i = startIndex; i < startIndex + segmentCount; i += 1) {
-      const current = displayGeoPoints[i];
-      const next = displayGeoPoints[i + 1];
-      const currentLocal = sceneData.localTrackPoints[i];
-      const nextLocal = sceneData.localTrackPoints[i + 1];
-
-      const speedFromCsv =
-        typeof current.speedKmh === "number" && Number.isFinite(current.speedKmh)
-          ? current.speedKmh
-          : typeof next.speedKmh === "number" && Number.isFinite(next.speedKmh)
-            ? next.speedKmh
-            : null;
-      const speed = speedFromCsv ?? pickFallbackSpeedKmh(current, next, currentLocal, nextLocal);
-      segmentSpeeds.push(Math.max(0, speed));
+    if (trailCursorRange.endCursor < 0) {
+      return null;
     }
-
-    if (segmentSpeeds.length === 0) {
+    const clampedStartCursor = clamp(trailCursorRange.startCursor, 0, maxSegmentIndex);
+    const clampedEndCursor = clamp(trailCursorRange.endCursor, clampedStartCursor, maxSegmentIndex);
+    const startIndexFloor = Math.floor(clampedStartCursor);
+    const endIndexFloor = Math.floor(clampedEndCursor);
+    const startIndexFrac = clampedStartCursor - startIndexFloor;
+    const endIndexFrac = clampedEndCursor - endIndexFloor;
+    if (endIndexFloor < startIndexFloor) {
       return null;
     }
 
-    const minSpeed = Math.min(...segmentSpeeds);
-    const maxSpeed = Math.max(...segmentSpeeds);
-    const speedPositions = new Float32Array(segmentSpeeds.length * 6);
-    const speedColors = new Float32Array(segmentSpeeds.length * 6);
+    const sourcePoints: Array<[number, number, number]> = [];
+    const sourceSegmentSpeeds: number[] = [];
+    const first = localTrackPoints[startIndexFloor];
+    if (!first) {
+      return null;
+    }
 
-    let offset = 0;
+    if (startIndexFrac > 1e-9 && startIndexFloor < maxSegmentIndex) {
+      const next = localTrackPoints[startIndexFloor + 1];
+      if (next) {
+        const head = interpolateLocalTrackPoint(first, next, startIndexFrac);
+        sourcePoints.push([head.x, head.y, head.z]);
+      } else {
+        sourcePoints.push([first.x, first.y, first.z]);
+      }
+    } else {
+      sourcePoints.push([first.x, first.y, first.z]);
+    }
+
+    for (let i = startIndexFloor + 1; i <= endIndexFloor; i += 1) {
+      const point = localTrackPoints[i];
+      if (!point) {
+        break;
+      }
+      sourcePoints.push([point.x, point.y, point.z]);
+      sourceSegmentSpeeds.push(baseSegmentSpeeds[i - 1] ?? 0);
+    }
+
+    if (endIndexFrac > 1e-9 && endIndexFloor < maxSegmentIndex) {
+      const from = localTrackPoints[endIndexFloor];
+      const to = localTrackPoints[endIndexFloor + 1];
+      if (from && to) {
+        const tail = interpolateLocalTrackPoint(from, to, endIndexFrac);
+        sourcePoints.push([tail.x, tail.y, tail.z]);
+        sourceSegmentSpeeds.push(baseSegmentSpeeds[endIndexFloor] ?? 0);
+      }
+    }
+
+    if (sourcePoints.length <= 1 || sourceSegmentSpeeds.length === 0) {
+      return null;
+    }
+
+    let pointsData = sourcePoints;
+    let segmentSpeeds = sourceSegmentSpeeds;
+    const shouldDownsample = isPlaying || sourcePoints.length > PLAYBACK_MAX_LINE_VERTICES * 2;
+    if (shouldDownsample && sourcePoints.length > PLAYBACK_MAX_LINE_VERTICES) {
+      pointsData = downsampleLineVertices3D(sourcePoints, PLAYBACK_MAX_LINE_VERTICES);
+      const reducedSegmentCount = pointsData.length - 1;
+      if (reducedSegmentCount <= 0) {
+        return null;
+      }
+      if (reducedSegmentCount !== sourceSegmentSpeeds.length) {
+        const remappedSpeeds: number[] = [];
+        const sourceLast = sourceSegmentSpeeds.length - 1;
+        const denominator = Math.max(1, reducedSegmentCount - 1);
+        for (let i = 0; i < reducedSegmentCount; i += 1) {
+          const mappedIndex = Math.max(0, Math.min(sourceLast, Math.round((i / denominator) * sourceLast)));
+          remappedSpeeds.push(sourceSegmentSpeeds[mappedIndex] ?? 0);
+        }
+        segmentSpeeds = remappedSpeeds;
+      }
+    }
+
+    const outerSegmentColors: Array<[number, number, number, number]> = [];
+    const innerSegmentColors: Array<[number, number, number, number]> = [];
+    const outerGlowAnchor = new THREE.Color("#f4fbff");
+    const minSpeed = speedScale.min;
+    const maxSpeed = speedScale.max;
+
     for (let i = 0; i < segmentSpeeds.length; i += 1) {
-      const segmentStart = sceneData.localTrackPoints[startIndex + i];
-      const segmentEnd = sceneData.localTrackPoints[startIndex + i + 1];
+      const age = segmentSpeeds.length <= 1 ? 1 : i / (segmentSpeeds.length - 1);
+      const fade = isPlaying ? 0.14 + 0.86 * Math.pow(age, 0.86) : 1;
+      const normalizedSpeed = clamp((segmentSpeeds[i] - minSpeed) / (maxSpeed - minSpeed), 0, 1);
+      const innerColor = speedColorFromNormalized(normalizedSpeed);
+      const outerBlend = isPlaying ? 0.58 + age * 0.12 : 0.56;
+      const outerColor = innerColor.clone().lerp(outerGlowAnchor, outerBlend);
 
-      const color = speedColor(segmentSpeeds[i], minSpeed, maxSpeed);
-      speedPositions[offset] = segmentStart.x;
-      speedPositions[offset + 1] = segmentStart.y;
-      speedPositions[offset + 2] = segmentStart.z;
-      speedPositions[offset + 3] = segmentEnd.x;
-      speedPositions[offset + 4] = segmentEnd.y;
-      speedPositions[offset + 5] = segmentEnd.z;
-
-      speedColors[offset] = color.r;
-      speedColors[offset + 1] = color.g;
-      speedColors[offset + 2] = color.b;
-      speedColors[offset + 3] = color.r;
-      speedColors[offset + 4] = color.g;
-      speedColors[offset + 5] = color.b;
-      offset += 6;
+      const innerAlpha = isPlaying ? 0.06 + 0.94 * fade : 0.95;
+      const outerAlpha = isPlaying ? 0.05 + 0.56 * fade : 0.66;
+      innerSegmentColors.push([innerColor.r, innerColor.g, innerColor.b, innerAlpha]);
+      outerSegmentColors.push([outerColor.r, outerColor.g, outerColor.b, outerAlpha]);
     }
 
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(speedPositions, 3));
-    geometry.setAttribute("color", new THREE.BufferAttribute(speedColors, 3));
-    return geometry;
+    const samplesPerSegment = isPlaying ? PLAYBACK_SMOOTH_SAMPLES_PER_SEGMENT : 2;
+    const smoothedInner = buildSmoothedPolylineWithColors(
+      pointsData,
+      innerSegmentColors,
+      samplesPerSegment,
+      PLAYBACK_SMOOTH_TENSION
+    );
+    const smoothedOuter = buildSmoothedPolylineWithColors(
+      pointsData,
+      outerSegmentColors,
+      samplesPerSegment,
+      PLAYBACK_SMOOTH_TENSION
+    );
+
+    return {
+      points: smoothedInner.points,
+      outerColors: smoothedOuter.colors,
+      innerColors: smoothedInner.colors
+    };
   }, [
     sceneData.localTrackPoints,
     displayGeoPoints,
+    baseSegmentSpeeds,
+    speedScale.min,
+    speedScale.max,
     isPlaying,
-    trailRange.startIndex,
-    trailRange.endIndex
+    trailCursorRange.startCursor,
+    trailCursorRange.endCursor
   ]);
-
-  useEffect(() => {
-    return () => {
-      speedGeometry?.dispose();
-    };
-  }, [speedGeometry]);
 
   useEffect(() => {
     const baseCoverage = Math.max(sceneData.xySpan * 3.2, 2500);
@@ -1391,10 +1732,25 @@ export function Viewer3D({
           <RasterTile key={tile.key} tile={tile} />
         ))}
 
-        {speedGeometry ? (
-          <lineSegments geometry={speedGeometry}>
-            <lineBasicMaterial vertexColors transparent opacity={0.95} />
-          </lineSegments>
+        {cometLineData ? (
+          <>
+            <Line
+              points={cometLineData.points}
+              vertexColors={cometLineData.outerColors}
+              lineWidth={Math.max(2.8, pointSize * 3.2)}
+              worldUnits
+              transparent
+              depthWrite={false}
+            />
+            <Line
+              points={cometLineData.points}
+              vertexColors={cometLineData.innerColors}
+              lineWidth={Math.max(1.15, pointSize * 1.45)}
+              worldUnits
+              transparent
+              depthWrite={false}
+            />
+          </>
         ) : null}
 
         <AutoFollowRig
@@ -1407,6 +1763,13 @@ export function Viewer3D({
           manualFollowUntilRef={manualFollowUntilRef}
         />
 
+        {currentMarker ? (
+          <CurrentPulseRing
+            position={currentMarker.position}
+            pointSize={pointSize}
+          />
+        ) : null}
+
         {markers.map((marker) => (
           <mesh
             key={marker.index}
@@ -1416,13 +1779,13 @@ export function Viewer3D({
               onSelect(marker.index);
             }}
           >
-            <sphereGeometry args={[markerRadius(marker, pointSize), 18, 18]} />
+            <sphereGeometry args={[markerRadius(marker, pointSize), 14, 14]} />
             <meshStandardMaterial
               color={markerColor(marker)}
-              emissive={marker.isCurrent ? "#8f6f11" : marker.isSelected ? "#6f6f6f" : "#000000"}
-              emissiveIntensity={marker.isCurrent || marker.isSelected ? 0.46 : 0}
-              roughness={0.36}
-              metalness={0.08}
+              emissive={marker.isCurrent ? "#715610" : marker.isSelected ? "#6f7a84" : "#000000"}
+              emissiveIntensity={marker.isCurrent ? 0.36 : marker.isSelected ? 0.24 : 0}
+              roughness={0.4}
+              metalness={0.06}
             />
           </mesh>
         ))}
@@ -1471,7 +1834,7 @@ export function Viewer3D({
             width: 92,
             height: 8,
             borderRadius: 999,
-            background: "linear-gradient(90deg, #2f77ff 0%, #ff3f2c 100%)"
+            background: "linear-gradient(90deg, #6f8cff 0%, #6ecdb9 56%, #ffc07a 100%)"
           }}
         />
         <Typography variant="caption" color="text.secondary">

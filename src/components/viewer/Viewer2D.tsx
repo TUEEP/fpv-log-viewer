@@ -3,7 +3,7 @@ import maplibregl from "maplibre-gl";
 import type { FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildRasterStyle } from "../../lib/map/rasterTiles";
-import { resolveTrailRange } from "../../lib/playback/trailWindow";
+import { resolveTrailCursorRange } from "../../lib/playback/trailWindow";
 import { ViewerCornerControls } from "./ViewerCornerControls";
 
 interface Viewer2DProps {
@@ -11,6 +11,7 @@ interface Viewer2DProps {
   smoothedTrack: [number, number][];
   selectedIndex: number;
   currentIndex: number;
+  playbackCursor: number;
   isPlaying: boolean;
   autoFollowMode: boolean;
   frontFollowMode: boolean;
@@ -44,22 +45,46 @@ interface FollowSnapshot2D {
 
 const SOURCE_SMOOTH = "fpv-smooth-track";
 const SOURCE_POINTS = "fpv-track-points";
-const LAYER_SMOOTH = "fpv-smooth-line";
+const LAYER_SMOOTH_OUTER = "fpv-smooth-line-outer";
+const LAYER_SMOOTH_INNER = "fpv-smooth-line-inner";
 const LAYER_MIDDLE = "fpv-point-middle";
 const LAYER_START = "fpv-point-start";
 const LAYER_END = "fpv-point-end";
 const LAYER_CURRENT = "fpv-point-current";
+const LAYER_CURRENT_RING = "fpv-point-current-ring";
 const LAYER_SELECTED = "fpv-point-selected";
 const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
-const PLAYBACK_DATA_PUSH_INTERVAL_MS = 50;
+const PLAYBACK_DATA_PUSH_INTERVAL_MS = 16;
 const PLAYBACK_MAX_LINE_VERTICES = 900;
-const PLAYBACK_MAX_POINT_FEATURES = 220;
+const TRACK_MAX_GRADIENT_STOPS = 260;
 const FOLLOW_LOOK_AHEAD_DEFAULT_MS = 1400;
 const FOLLOW_LOOK_AHEAD_MIN_MS = 700;
 const FOLLOW_LOOK_AHEAD_MAX_MS = 3200;
 const FOLLOW_MANUAL_HOLD_MS = 3000;
 const EARTH_RADIUS_M = 6378137;
 const DEG_TO_RAD = Math.PI / 180;
+const SPEED_COLOR_SLOW: [number, number, number] = [111, 140, 255];
+const SPEED_COLOR_MID: [number, number, number] = [110, 205, 185];
+const SPEED_COLOR_FAST: [number, number, number] = [255, 192, 122];
+const TRACK_OUTER_GLOW: [number, number, number] = [244, 251, 255];
+const TRACK_OUTER_GRADIENT_FALLBACK = [
+  "interpolate",
+  ["linear"],
+  ["line-progress"],
+  0,
+  "rgba(200, 220, 255, 0.58)",
+  1,
+  "rgba(255, 222, 180, 0.58)"
+];
+const TRACK_INNER_GRADIENT_FALLBACK = [
+  "interpolate",
+  ["linear"],
+  ["line-progress"],
+  0,
+  "rgba(120, 170, 255, 0.92)",
+  1,
+  "rgba(255, 192, 122, 0.92)"
+];
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -200,10 +225,145 @@ function downsampleLineVertices(track: [number, number][], maxVertices: number):
   return result;
 }
 
+function interpolateCoord(
+  start: [number, number],
+  end: [number, number],
+  tRaw: number
+): [number, number] {
+  const t = clamp(tRaw, 0, 1);
+  return [
+    start[0] + (end[0] - start[0]) * t,
+    start[1] + (end[1] - start[1]) * t
+  ];
+}
+
+function buildWindowedTrack(
+  track: [number, number][],
+  startCursor: number,
+  endCursor: number
+): [number, number][] {
+  if (track.length === 0) {
+    return [];
+  }
+
+  const maxCursor = track.length - 1;
+  const start = clamp(startCursor, 0, maxCursor);
+  const end = clamp(endCursor, start, maxCursor);
+  const startFloor = Math.floor(start);
+  const endFloor = Math.floor(end);
+  const startAlpha = start - startFloor;
+  const endAlpha = end - endFloor;
+  const result: [number, number][] = [];
+
+  const startPoint =
+    startAlpha > 1e-9 && startFloor < maxCursor
+      ? interpolateCoord(track[startFloor]!, track[startFloor + 1]!, startAlpha)
+      : track[startFloor]!;
+  result.push(startPoint);
+
+  for (let i = startFloor + 1; i <= endFloor; i += 1) {
+    const point = track[i];
+    if (point) {
+      result.push(point);
+    }
+  }
+
+  if (endAlpha > 1e-9 && endFloor < maxCursor) {
+    const tail = interpolateCoord(track[endFloor]!, track[endFloor + 1]!, endAlpha);
+    const last = result[result.length - 1];
+    if (!last || last[0] !== tail[0] || last[1] !== tail[1]) {
+      result.push(tail);
+    }
+  }
+
+  return result;
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) {
+    return 0;
+  }
+  if (sorted.length === 1) {
+    return sorted[0];
+  }
+
+  const idx = clamp(p, 0, 1) * (sorted.length - 1);
+  const lower = Math.floor(idx);
+  const upper = Math.ceil(idx);
+  const alpha = idx - lower;
+  const lowerValue = sorted[lower] ?? sorted[0];
+  const upperValue = sorted[upper] ?? sorted[sorted.length - 1];
+  return lowerValue + (upperValue - lowerValue) * alpha;
+}
+
+function mixRgb(
+  a: [number, number, number],
+  b: [number, number, number],
+  tRaw: number
+): [number, number, number] {
+  const t = clamp(tRaw, 0, 1);
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t)
+  ];
+}
+
+function speedColorFromNormalized(normalizedSpeed: number): [number, number, number] {
+  const t = clamp(normalizedSpeed, 0, 1);
+  if (t <= 0.58) {
+    return mixRgb(SPEED_COLOR_SLOW, SPEED_COLOR_MID, t / 0.58);
+  }
+  return mixRgb(SPEED_COLOR_MID, SPEED_COLOR_FAST, (t - 0.58) / 0.42);
+}
+
+function toRgba(color: [number, number, number], alpha: number): string {
+  return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${clamp(alpha, 0, 1).toFixed(3)})`;
+}
+
+function resolveSegmentSpeedKmh(
+  points: FlightPoint[],
+  displayPoints: MapCoordPoint[],
+  segmentIndex: number
+): number {
+  const clampedSegmentIndex = Math.max(0, Math.min(points.length - 2, segmentIndex));
+  const current = points[clampedSegmentIndex];
+  const next = points[clampedSegmentIndex + 1];
+  if (!current || !next) {
+    return 0;
+  }
+
+  const currentSpeed = current.speedKmh;
+  const nextSpeed = next.speedKmh;
+  if (typeof currentSpeed === "number" && Number.isFinite(currentSpeed)) {
+    return Math.max(0, currentSpeed);
+  }
+  if (typeof nextSpeed === "number" && Number.isFinite(nextSpeed)) {
+    return Math.max(0, nextSpeed);
+  }
+
+  const from = displayPoints[clampedSegmentIndex];
+  const to = displayPoints[clampedSegmentIndex + 1];
+  if (!from || !to) {
+    return 0;
+  }
+
+  const dtMs = next.timestampMs - current.timestampMs;
+  if (dtMs <= 0) {
+    return 0;
+  }
+  const distance = measureOffsetMeters(from, to).distance;
+  if (!Number.isFinite(distance)) {
+    return 0;
+  }
+  return (distance / (dtMs / 1000)) * 3.6;
+}
+
 function ensureLayers(map: maplibregl.Map) {
   if (!map.getSource(SOURCE_SMOOTH)) {
     map.addSource(SOURCE_SMOOTH, {
       type: "geojson",
+      lineMetrics: true,
       data: {
         type: "Feature",
         properties: {},
@@ -225,15 +385,36 @@ function ensureLayers(map: maplibregl.Map) {
     });
   }
 
-  if (!map.getLayer(LAYER_SMOOTH)) {
+  if (!map.getLayer(LAYER_SMOOTH_OUTER)) {
     map.addLayer({
-      id: LAYER_SMOOTH,
+      id: LAYER_SMOOTH_OUTER,
       type: "line",
       source: SOURCE_SMOOTH,
+      layout: {
+        "line-cap": "round",
+        "line-join": "round"
+      },
       paint: {
-        "line-color": "#3fb9ff",
-        "line-width": 2.8,
-        "line-opacity": 0.85
+        "line-gradient": TRACK_OUTER_GRADIENT_FALLBACK as any,
+        "line-width": 5.8,
+        "line-opacity": 1
+      }
+    });
+  }
+
+  if (!map.getLayer(LAYER_SMOOTH_INNER)) {
+    map.addLayer({
+      id: LAYER_SMOOTH_INNER,
+      type: "line",
+      source: SOURCE_SMOOTH,
+      layout: {
+        "line-cap": "round",
+        "line-join": "round"
+      },
+      paint: {
+        "line-gradient": TRACK_INNER_GRADIENT_FALLBACK as any,
+        "line-width": 2.9,
+        "line-opacity": 1
       }
     });
   }
@@ -287,9 +468,25 @@ function ensureLayers(map: maplibregl.Map) {
       source: SOURCE_POINTS,
       filter: ["==", ["get", "isCurrent"], 1],
       paint: {
-        "circle-color": "#ffe45c",
-        "circle-stroke-color": "#6f5f00",
-        "circle-stroke-width": 2
+        "circle-color": "#ffe8a4",
+        "circle-stroke-color": "#7a5f1a",
+        "circle-stroke-width": 1.4
+      }
+    });
+  }
+
+  if (!map.getLayer(LAYER_CURRENT_RING)) {
+    map.addLayer({
+      id: LAYER_CURRENT_RING,
+      type: "circle",
+      source: SOURCE_POINTS,
+      filter: ["==", ["get", "isCurrent"], 1],
+      paint: {
+        "circle-color": "rgba(0, 0, 0, 0)",
+        "circle-stroke-color": "#ffe082",
+        "circle-stroke-width": 1.8,
+        "circle-stroke-opacity": 0.56,
+        "circle-radius": 7.5
       }
     });
   }
@@ -301,7 +498,7 @@ function ensureLayers(map: maplibregl.Map) {
       source: SOURCE_POINTS,
       filter: ["==", ["get", "isSelected"], 1],
       paint: {
-        "circle-color": "#ffffff",
+        "circle-color": "rgba(0, 0, 0, 0)",
         "circle-stroke-color": "#1f5a85",
         "circle-stroke-width": 2
       }
@@ -314,13 +511,14 @@ export function Viewer2D({
   smoothedTrack,
   selectedIndex,
   currentIndex,
+  playbackCursor,
   isPlaying,
   autoFollowMode,
   frontFollowMode,
   mapProvider,
   mapStyle,
   pointSize,
-  pointStride,
+  pointStride: _pointStride,
   setAutoFollowMode,
   setFrontFollowMode,
   onToggleViewMode,
@@ -329,7 +527,9 @@ export function Viewer2D({
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const onSelectRef = useRef(onSelect);
-  const smoothedTrackRef = useRef(smoothedTrack);
+  const trackCoordsRef = useRef<[number, number][]>([]);
+  const trackOuterGradientRef = useRef<any>(TRACK_OUTER_GRADIENT_FALLBACK);
+  const trackInnerGradientRef = useRef<any>(TRACK_INNER_GRADIENT_FALLBACK);
   const pointFeaturesRef = useRef<Array<Record<string, unknown>>>([]);
   const pointSizeRef = useRef(pointSize);
   const manualFollowUntilRef = useRef(0);
@@ -338,6 +538,7 @@ export function Viewer2D({
   const dataPushPendingRef = useRef(false);
   const dataPushRetryRafRef = useRef<number | null>(null);
   const pointRadiiRetryRafRef = useRef<number | null>(null);
+  const currentPulseRafRef = useRef<number | null>(null);
   const lookAheadMsRef = useRef(FOLLOW_LOOK_AHEAD_DEFAULT_MS);
   const followTargetRef = useRef<{
     trackPosition: boolean;
@@ -376,6 +577,13 @@ export function Viewer2D({
     }
   };
 
+  const clearCurrentPulseLoop = () => {
+    if (currentPulseRafRef.current !== null) {
+      window.cancelAnimationFrame(currentPulseRafRef.current);
+      currentPulseRafRef.current = null;
+    }
+  };
+
   const schedulePointRadiiRetry = (map: maplibregl.Map) => {
     if (pointRadiiRetryRafRef.current !== null) {
       return;
@@ -402,15 +610,51 @@ export function Viewer2D({
     }
 
     try {
-      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.5 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_START, "circle-radius", 4.5 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_END, "circle-radius", 4.5 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_CURRENT, "circle-radius", 5.3 * pointSizeRef.current);
-      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 5 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-gradient", trackOuterGradientRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_INNER, "line-gradient", trackInnerGradientRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-width", 5.8 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_INNER, "line-width", 2.9 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.2 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_START, "circle-radius", 4.1 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_END, "circle-radius", 4.1 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_CURRENT, "circle-radius", 3.3 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_CURRENT_RING, "circle-stroke-width", 1.7 * pointSizeRef.current);
+      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 4.8 * pointSizeRef.current);
       clearPendingPointRadiiRetry();
     } catch {
       schedulePointRadiiRetry(map);
     }
+  };
+
+  const applyCurrentPulse = (map: maplibregl.Map, nowMs: number) => {
+    if (!map || !map.getStyle()) {
+      return;
+    }
+
+    try {
+      const phase = nowMs * 0.0062;
+      const wave = 0.5 + 0.5 * Math.sin(phase);
+      const radius = (6.2 + wave * 3.6) * pointSizeRef.current;
+      const strokeOpacity = 0.2 + (1 - wave) * 0.58;
+      map.setPaintProperty(LAYER_CURRENT_RING, "circle-radius", radius);
+      map.setPaintProperty(LAYER_CURRENT_RING, "circle-stroke-opacity", strokeOpacity);
+    } catch {
+      // Style may be transitioning; next frame will retry.
+    }
+  };
+
+  const startCurrentPulseLoop = (map: maplibregl.Map) => {
+    clearCurrentPulseLoop();
+
+    const tick = (now: number) => {
+      if (mapRef.current !== map) {
+        return;
+      }
+      applyCurrentPulse(map, now);
+      currentPulseRafRef.current = window.requestAnimationFrame(tick);
+    };
+
+    currentPulseRafRef.current = window.requestAnimationFrame(tick);
   };
 
   const pushMapData = (map: maplibregl.Map) => {
@@ -427,9 +671,11 @@ export function Viewer2D({
         properties: {},
         geometry: {
           type: "LineString",
-          coordinates: smoothedTrackRef.current
+          coordinates: trackCoordsRef.current
         }
       } as any);
+      map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-gradient", trackOuterGradientRef.current);
+      map.setPaintProperty(LAYER_SMOOTH_INNER, "line-gradient", trackInnerGradientRef.current);
 
       const pointSource = map.getSource(SOURCE_POINTS) as maplibregl.GeoJSONSource | undefined;
       pointSource?.setData({
@@ -481,6 +727,7 @@ export function Viewer2D({
     return () => {
       clearPendingDataPush();
       clearPendingPointRadiiRetry();
+      clearCurrentPulseLoop();
       dataPushPendingRef.current = false;
     };
   }, []);
@@ -609,35 +856,110 @@ export function Viewer2D({
     };
   }, [displayPoints, points, currentIndex]);
 
-  const displaySmoothedTrack = useMemo<[number, number][]>(() => {
-    const trailRange = resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS);
-    if (trailRange.endIndex < 0) {
+  const segmentSpeeds = useMemo<number[]>(() => {
+    const segmentCount = Math.min(points.length, displayPoints.length) - 1;
+    if (segmentCount <= 0) {
       return [];
     }
 
+    const nextSpeeds: number[] = [];
+    for (let i = 0; i < segmentCount; i += 1) {
+      nextSpeeds.push(resolveSegmentSpeedKmh(points, displayPoints, i));
+    }
+    return nextSpeeds;
+  }, [points, displayPoints]);
+
+  const speedScale = useMemo(() => {
+    if (segmentSpeeds.length === 0) {
+      return { min: 0, max: 1 };
+    }
+
+    const sorted = [...segmentSpeeds].sort((a, b) => a - b);
+    const robustMin = percentile(sorted, 0.1);
+    const robustMax = percentile(sorted, 0.9);
+    const min = Number.isFinite(robustMin) ? robustMin : sorted[0] ?? 0;
+    const max = Math.max(
+      min + 0.001,
+      Number.isFinite(robustMax) ? robustMax : sorted[sorted.length - 1] ?? min + 0.001
+    );
+    return { min, max };
+  }, [segmentSpeeds]);
+
+  const trackStyleData = useMemo(() => {
+    const trailCursorRange = resolveTrailCursorRange(points, playbackCursor, isPlaying, PLAYBACK_TRAIL_WINDOW_MS);
+    if (trailCursorRange.endCursor < 0) {
+      return {
+        coordinates: [] as [number, number][],
+        outerGradient: TRACK_OUTER_GRADIENT_FALLBACK,
+        innerGradient: TRACK_INNER_GRADIENT_FALLBACK
+      };
+    }
+    if (displaySmoothedTrackBase.length < 2 || segmentSpeeds.length === 0) {
+      return {
+        coordinates: [] as [number, number][],
+        outerGradient: TRACK_OUTER_GRADIENT_FALLBACK,
+        innerGradient: TRACK_INNER_GRADIENT_FALLBACK
+      };
+    }
+
     let sourceTrack: [number, number][] = displaySmoothedTrackBase;
+    let startPointIndex = 0;
+    let endPointIndex = Math.max(0, points.length - 1);
     if (isPlaying && points.length > 1 && displaySmoothedTrackBase.length > 1) {
       const samplePerSegment = Math.max(
         1,
         Math.round((displaySmoothedTrackBase.length - 1) / Math.max(points.length - 1, 1))
       );
-      const startOffset = Math.max(
+      const startOffsetFloat = trailCursorRange.startCursor * samplePerSegment;
+      const endOffsetFloat = trailCursorRange.endCursor * samplePerSegment;
+      sourceTrack = buildWindowedTrack(displaySmoothedTrackBase, startOffsetFloat, endOffsetFloat);
+      startPointIndex = trailCursorRange.startCursor;
+      endPointIndex = trailCursorRange.endCursor;
+    }
+
+    if (isPlaying) {
+      sourceTrack = downsampleLineVertices(sourceTrack, PLAYBACK_MAX_LINE_VERTICES);
+    }
+
+    const segmentCount = sourceTrack.length - 1;
+    if (segmentCount <= 0) {
+      return {
+        coordinates: sourceTrack,
+        outerGradient: TRACK_OUTER_GRADIENT_FALLBACK,
+        innerGradient: TRACK_INNER_GRADIENT_FALLBACK
+      };
+    }
+
+    const pointSpan = Math.max(0.001, endPointIndex - startPointIndex);
+    const stopCount = Math.max(1, Math.min(segmentCount, TRACK_MAX_GRADIENT_STOPS));
+    const outerGradient: any[] = ["interpolate", ["linear"], ["line-progress"]];
+    const innerGradient: any[] = ["interpolate", ["linear"], ["line-progress"]];
+    for (let stop = 0; stop <= stopCount; stop += 1) {
+      const progress = stop / stopCount;
+      const pointPos = startPointIndex + progress * pointSpan;
+      const mappedSegmentIndex = Math.max(
         0,
-        Math.min(displaySmoothedTrackBase.length - 1, trailRange.startIndex * samplePerSegment)
+        Math.min(segmentSpeeds.length - 1, Math.floor(pointPos))
       );
-      const endOffset = Math.max(
-        startOffset,
-        Math.min(displaySmoothedTrackBase.length - 1, trailRange.endIndex * samplePerSegment)
-      );
-      sourceTrack = displaySmoothedTrackBase.slice(startOffset, endOffset + 1);
+      const speed = segmentSpeeds[mappedSegmentIndex] ?? 0;
+      const normalizedSpeed = clamp((speed - speedScale.min) / (speedScale.max - speedScale.min), 0, 1);
+      const innerColor = speedColorFromNormalized(normalizedSpeed);
+      const outerBlend = isPlaying ? 0.58 + progress * 0.12 : 0.56;
+      const outerColor = mixRgb(innerColor, TRACK_OUTER_GLOW, outerBlend);
+
+      const fade = isPlaying ? 0.14 + 0.86 * Math.pow(progress, 0.86) : 1;
+      const innerAlpha = isPlaying ? 0.06 + 0.94 * fade : 0.95;
+      const outerAlpha = isPlaying ? 0.05 + 0.56 * fade : 0.66;
+      innerGradient.push(progress, toRgba(innerColor, innerAlpha));
+      outerGradient.push(progress, toRgba(outerColor, outerAlpha));
     }
 
-    if (!isPlaying) {
-      return sourceTrack;
-    }
-
-    return downsampleLineVertices(sourceTrack, PLAYBACK_MAX_LINE_VERTICES);
-  }, [displaySmoothedTrackBase, points, currentIndex, isPlaying]);
+    return {
+      coordinates: sourceTrack,
+      outerGradient,
+      innerGradient
+    };
+  }, [displaySmoothedTrackBase, points, playbackCursor, isPlaying, segmentSpeeds, speedScale.min, speedScale.max]);
 
   const pointFeatures = useMemo(() => {
     const result: Array<Record<string, unknown>> = [];
@@ -645,26 +967,31 @@ export function Viewer2D({
       return result;
     }
 
-    const trailRange = resolveTrailRange(points, currentIndex, isPlaying, PLAYBACK_TRAIL_WINDOW_MS);
-    const includeIndexes = new Set<number>();
-
-    if (trailRange.endIndex >= 0 && isPlaying) {
-      const total = Math.max(0, trailRange.endIndex - trailRange.startIndex + 1);
-      const playbackStride = Math.max(1, Math.ceil(total / PLAYBACK_MAX_POINT_FEATURES));
-      for (let index = trailRange.startIndex; index <= trailRange.endIndex; index += playbackStride) {
-        includeIndexes.add(index);
+    const clampedCursor = clamp(playbackCursor, 0, Math.max(displayPoints.length - 1, 0));
+    const cursorIndex = Math.floor(clampedCursor);
+    const cursorAlpha = clampedCursor - cursorIndex;
+    const interpolatedCurrentPoint = (() => {
+      const from = displayPoints[cursorIndex];
+      if (!from) {
+        return null;
       }
-      includeIndexes.add(trailRange.endIndex);
-    } else {
-      points.forEach((_, index) => {
-        if (index === 0 || index === points.length - 1 || index % pointStride === 0) {
-          includeIndexes.add(index);
-        }
-        if (index === selectedIndex || index === currentIndex) {
-          includeIndexes.add(index);
-        }
-      });
-    }
+      if (cursorAlpha <= 1e-6 || cursorIndex >= displayPoints.length - 1) {
+        return from;
+      }
+      const to = displayPoints[cursorIndex + 1];
+      if (!to) {
+        return from;
+      }
+      return {
+        index: from.index,
+        lon: from.lon + (to.lon - from.lon) * cursorAlpha,
+        lat: from.lat + (to.lat - from.lat) * cursorAlpha
+      };
+    })();
+
+    const includeIndexes = new Set<number>();
+    includeIndexes.add(0);
+    includeIndexes.add(points.length - 1);
 
     if (selectedIndex >= 0 && selectedIndex < points.length) {
       includeIndexes.add(selectedIndex);
@@ -674,11 +1001,6 @@ export function Viewer2D({
     }
 
     includeIndexes.forEach((index) => {
-      if (isPlaying && trailRange.endIndex >= 0) {
-        if (index < trailRange.startIndex || index > trailRange.endIndex) {
-          return;
-        }
-      }
       const point = points[index];
       const displayPoint = displayPoints[index];
       if (!point) {
@@ -693,6 +1015,8 @@ export function Viewer2D({
       const isCurrent = index === currentIndex ? 1 : 0;
       const isSelected = index === selectedIndex ? 1 : 0;
       const isActive = isCurrent || isSelected ? 1 : 0;
+      const coordPoint =
+        isCurrent && interpolatedCurrentPoint ? interpolatedCurrentPoint : displayPoint;
 
       result.push({
         type: "Feature",
@@ -705,21 +1029,23 @@ export function Viewer2D({
         },
         geometry: {
           type: "Point",
-          coordinates: [displayPoint.lon, displayPoint.lat]
+          coordinates: [coordPoint.lon, coordPoint.lat]
         }
       });
     });
 
     return result;
-  }, [points, displayPoints, pointStride, selectedIndex, currentIndex, isPlaying]);
+  }, [points, displayPoints, selectedIndex, currentIndex, playbackCursor]);
 
   useEffect(() => {
-    smoothedTrackRef.current = displaySmoothedTrack;
+    trackCoordsRef.current = trackStyleData.coordinates;
+    trackOuterGradientRef.current = trackStyleData.outerGradient;
+    trackInnerGradientRef.current = trackStyleData.innerGradient;
     pointFeaturesRef.current = pointFeatures;
     if (mapRef.current) {
       scheduleMapDataPush(mapRef.current, isPlaying);
     }
-  }, [displaySmoothedTrack, pointFeatures, isPlaying]);
+  }, [trackStyleData, pointFeatures, isPlaying]);
 
   useEffect(() => {
     pointSizeRef.current = pointSize;
@@ -746,12 +1072,13 @@ export function Viewer2D({
     mapRef.current = map;
     let cleanupManualFollow: (() => void) | null = null;
 
-    const clickableLayers = [LAYER_MIDDLE, LAYER_START, LAYER_END, LAYER_CURRENT, LAYER_SELECTED];
+    const clickableLayers = [LAYER_MIDDLE, LAYER_START, LAYER_END, LAYER_CURRENT, LAYER_CURRENT_RING, LAYER_SELECTED];
 
     map.on("load", () => {
       ensureLayers(map);
       applyPointRadii(map);
       pushMapData(map);
+      startCurrentPulseLoop(map);
 
       map.on("click", (event) => {
         const features = map.queryRenderedFeatures(event.point, { layers: clickableLayers });
@@ -798,6 +1125,7 @@ export function Viewer2D({
     return () => {
       clearPendingDataPush();
       clearPendingPointRadiiRetry();
+      clearCurrentPulseLoop();
       dataPushPendingRef.current = false;
       cleanupManualFollow?.();
       map.remove();
