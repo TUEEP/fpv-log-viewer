@@ -336,6 +336,8 @@ export function Viewer2D({
   const lastDataPushAtRef = useRef(0);
   const dataPushTimerRef = useRef<number | null>(null);
   const dataPushPendingRef = useRef(false);
+  const dataPushRetryRafRef = useRef<number | null>(null);
+  const pointRadiiRetryRafRef = useRef<number | null>(null);
   const lookAheadMsRef = useRef(FOLLOW_LOOK_AHEAD_DEFAULT_MS);
   const followTargetRef = useRef<{
     trackPosition: boolean;
@@ -361,15 +363,41 @@ export function Viewer2D({
       window.clearTimeout(dataPushTimerRef.current);
       dataPushTimerRef.current = null;
     }
+    if (dataPushRetryRafRef.current !== null) {
+      window.cancelAnimationFrame(dataPushRetryRafRef.current);
+      dataPushRetryRafRef.current = null;
+    }
+  };
+
+  const clearPendingPointRadiiRetry = () => {
+    if (pointRadiiRetryRafRef.current !== null) {
+      window.cancelAnimationFrame(pointRadiiRetryRafRef.current);
+      pointRadiiRetryRafRef.current = null;
+    }
+  };
+
+  const schedulePointRadiiRetry = (map: maplibregl.Map) => {
+    if (pointRadiiRetryRafRef.current !== null) {
+      return;
+    }
+    pointRadiiRetryRafRef.current = window.requestAnimationFrame(() => {
+      pointRadiiRetryRafRef.current = null;
+      applyPointRadii(map);
+    });
+  };
+
+  const scheduleDataPushRetry = (map: maplibregl.Map) => {
+    if (dataPushRetryRafRef.current !== null) {
+      return;
+    }
+    dataPushRetryRafRef.current = window.requestAnimationFrame(() => {
+      dataPushRetryRafRef.current = null;
+      pushMapData(map);
+    });
   };
 
   const applyPointRadii = (map: maplibregl.Map) => {
     if (!map || !map.getStyle()) {
-      return;
-    }
-
-    if (!map.isStyleLoaded()) {
-      map.once("idle", () => applyPointRadii(map));
       return;
     }
 
@@ -379,18 +407,14 @@ export function Viewer2D({
       map.setPaintProperty(LAYER_END, "circle-radius", 4.5 * pointSizeRef.current);
       map.setPaintProperty(LAYER_CURRENT, "circle-radius", 5.3 * pointSizeRef.current);
       map.setPaintProperty(LAYER_SELECTED, "circle-radius", 5 * pointSizeRef.current);
+      clearPendingPointRadiiRetry();
     } catch {
-      map.once("idle", () => applyPointRadii(map));
+      schedulePointRadiiRetry(map);
     }
   };
 
   const pushMapData = (map: maplibregl.Map) => {
     if (!map || !map.getStyle()) {
-      return;
-    }
-
-    if (!map.isStyleLoaded()) {
-      map.once("idle", () => pushMapData(map));
       return;
     }
 
@@ -415,8 +439,9 @@ export function Viewer2D({
 
       dataPushPendingRef.current = false;
       lastDataPushAtRef.current = performance.now();
+      clearPendingDataPush();
     } catch {
-      map.once("idle", () => pushMapData(map));
+      scheduleDataPushRetry(map);
     }
   };
 
@@ -455,6 +480,7 @@ export function Viewer2D({
   useEffect(() => {
     return () => {
       clearPendingDataPush();
+      clearPendingPointRadiiRetry();
       dataPushPendingRef.current = false;
     };
   }, []);
@@ -771,6 +797,7 @@ export function Viewer2D({
 
     return () => {
       clearPendingDataPush();
+      clearPendingPointRadiiRetry();
       dataPushPendingRef.current = false;
       cleanupManualFollow?.();
       map.remove();
