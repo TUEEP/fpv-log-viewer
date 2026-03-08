@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import type { FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 import { wgs84ToGcj02 } from "../../lib/math/coordTransform";
 import { buildRasterStyle } from "../../lib/map/rasterTiles";
 import { resolveTrailCursorRange } from "../../lib/playback/trailWindow";
 import { ViewerCornerControls } from "./ViewerCornerControls";
+import { ViewerNavigationControls } from "./ViewerNavigationControls";
+import { ViewerSpeedLegend } from "./ViewerSpeedLegend";
 
 interface Viewer2DProps {
   points: FlightPoint[];
@@ -524,6 +526,7 @@ export function Viewer2D({
 }: Viewer2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const [mapBearingDeg, setMapBearingDeg] = useState(0);
   const onSelectRef = useRef(onSelect);
   const trackCoordsRef = useRef<[number, number][]>([]);
   const trackOuterGradientRef = useRef<any>(TRACK_OUTER_GRADIENT_FALLBACK);
@@ -1052,6 +1055,38 @@ export function Viewer2D({
     }
   }, [trackWidth]);
 
+  const syncMapBearing = useCallback((map: maplibregl.Map) => {
+    const nextBearing = normalizeBearingDeg(map.getBearing());
+    setMapBearingDeg((prev) => (Math.abs(bearingDiffDeg(nextBearing, prev)) < 0.1 ? prev : nextBearing));
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+    map.zoomIn({ duration: 180 });
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+    map.zoomOut({ duration: 180 });
+  }, []);
+
+  const handleResetNorth = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) {
+      return;
+    }
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+    map.easeTo({ bearing: 0, duration: 180 });
+  }, []);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) {
@@ -1066,19 +1101,19 @@ export function Viewer2D({
       pitch: 0
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
     mapRef.current = map;
+    syncMapBearing(map);
     let cleanupManualFollow: (() => void) | null = null;
 
     const clickableLayers = [LAYER_MIDDLE, LAYER_START, LAYER_END, LAYER_CURRENT, LAYER_CURRENT_RING, LAYER_SELECTED];
 
-    map.on("load", () => {
+    const handleLoad = () => {
       ensureLayers(map);
       applyPointRadii(map);
       pushMapData(map);
       startCurrentPulseLoop(map);
 
-      map.on("click", (event) => {
+      const onMapClick = (event: maplibregl.MapMouseEvent) => {
         const features = map.queryRenderedFeatures(event.point, { layers: clickableLayers });
         const target = features[0];
         if (!target?.properties) {
@@ -1089,15 +1124,19 @@ export function Viewer2D({
         if (Number.isFinite(index)) {
           onSelectRef.current(index);
         }
-      });
+      };
+      map.on("click", onMapClick);
+
+      const onLayerMouseEnter = () => {
+        map.getCanvas().style.cursor = "pointer";
+      };
+      const onLayerMouseLeave = () => {
+        map.getCanvas().style.cursor = "";
+      };
 
       clickableLayers.forEach((layerId) => {
-        map.on("mouseenter", layerId, () => {
-          map.getCanvas().style.cursor = "pointer";
-        });
-        map.on("mouseleave", layerId, () => {
-          map.getCanvas().style.cursor = "";
-        });
+        map.on("mouseenter", layerId, onLayerMouseEnter);
+        map.on("mouseleave", layerId, onLayerMouseLeave);
       });
 
       const markManualFollow = () => {
@@ -1113,14 +1152,28 @@ export function Viewer2D({
         map.off("dragstart", markManualFollow);
         canvas.removeEventListener("wheel", onCanvasWheel);
         canvas.removeEventListener("pointerdown", onCanvasPointerDown);
+        map.off("click", onMapClick);
+        clickableLayers.forEach((layerId) => {
+          map.off("mouseenter", layerId, onLayerMouseEnter);
+          map.off("mouseleave", layerId, onLayerMouseLeave);
+        });
       };
 
       if (displayPoints.length > 0) {
         fitMapToTrack(map, displayPoints);
       }
-    });
+    };
+
+    const handleRotate = () => {
+      syncMapBearing(map);
+    };
+
+    map.on("rotate", handleRotate);
+    map.on("load", handleLoad);
 
     return () => {
+      map.off("rotate", handleRotate);
+      map.off("load", handleLoad);
       clearPendingDataPush();
       clearPendingPointRadiiRetry();
       clearCurrentPulseLoop();
@@ -1129,7 +1182,7 @@ export function Viewer2D({
       map.remove();
       mapRef.current = null;
     };
-  }, [mapProvider, mapStyle, displayPoints, points.length]);
+  }, [mapProvider, mapStyle, displayPoints, points.length, syncMapBearing]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1346,6 +1399,14 @@ export function Viewer2D({
           position: "absolute",
           inset: 0
         }}
+      />
+
+      <ViewerSpeedLegend />
+      <ViewerNavigationControls
+        bearingDeg={mapBearingDeg}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onResetNorth={handleResetNorth}
       />
 
       <ViewerCornerControls

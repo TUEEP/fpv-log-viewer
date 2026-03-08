@@ -1,5 +1,3 @@
-import { Box, Paper, Typography } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import {
   useCallback,
   useEffect,
@@ -8,7 +6,6 @@ import {
   useState,
   type MutableRefObject
 } from "react";
-import { useTranslation } from "react-i18next";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Line, OrbitControls } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -18,6 +15,8 @@ import { buildTileUrl, getRasterTileConfig } from "../../lib/map/rasterTiles";
 import { resolveTrailCursorRange } from "../../lib/playback/trailWindow";
 import type { AltitudeMode, FlightPoint, MapProvider, MapStyleMode } from "../../types/flight";
 import { ViewerCornerControls } from "./ViewerCornerControls";
+import { ViewerNavigationControls } from "./ViewerNavigationControls";
+import { ViewerSpeedLegend } from "./ViewerSpeedLegend";
 
 interface Viewer3DProps {
   points: FlightPoint[];
@@ -87,6 +86,7 @@ interface TileTextureCacheEntry {
   status: "loading" | "loaded" | "error";
   texture: THREE.Texture | null;
   promise: Promise<THREE.Texture> | null;
+  lastUsedAt: number;
 }
 
 interface SceneData {
@@ -118,6 +118,7 @@ const TILE_BUDGET = 196;
 const TILE_MIN_ZOOM = 5;
 const TILE_MAX_ZOOM = 19;
 const TILE_LAYOUT_ROUND = true;
+const TILE_TEXTURE_CACHE_MAX_ENTRIES = 320;
 const SKY_TOP_COLOR = "#0a2138";
 const SKY_HORIZON_COLOR = "#55788f";
 const SKY_BOTTOM_COLOR = "#5b7688";
@@ -132,6 +133,12 @@ const FOLLOW_LOOK_AHEAD_DEFAULT_MS = 1400;
 const FOLLOW_LOOK_AHEAD_MIN_MS = 700;
 const FOLLOW_LOOK_AHEAD_MAX_MS = 3200;
 const FOLLOW_MANUAL_HOLD_MS = 3000;
+const CAMERA_NAV_ANIMATION_MS = 220;
+const TRACK_OUTER_WIDTH_3D = 1.92;
+const TRACK_OUTER_MIN_WIDTH_3D = 1.72;
+const TRACK_INNER_WIDTH_3D = 1.52;
+const TRACK_INNER_MIN_WIDTH_3D = 1.22;
+const TRACK_INNER_SHADE_3D = 0.2;
 
 const SKY_VERTEX_SHADER = `
 varying float vHeight;
@@ -187,6 +194,11 @@ void main() {
 const tileTextureLoader = new THREE.TextureLoader();
 tileTextureLoader.setCrossOrigin("anonymous");
 const tileTextureCache = new Map<string, TileTextureCacheEntry>();
+let tileTextureCacheEpoch = 0;
+
+function markTileTextureUsed(entry: TileTextureCacheEntry) {
+  entry.lastUsedAt = performance.now();
+}
 
 function configureTileTexture(texture: THREE.Texture) {
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -194,21 +206,69 @@ function configureTileTexture(texture: THREE.Texture) {
   texture.needsUpdate = true;
 }
 
+function disposeTileTextureCacheEntry(entry: TileTextureCacheEntry) {
+  entry.texture?.dispose();
+}
+
+function pruneTileTextureCache(activeUrls: Iterable<string>) {
+  const activeSet = new Set(activeUrls);
+  const targetSize = Math.max(TILE_TEXTURE_CACHE_MAX_ENTRIES, activeSet.size);
+  if (tileTextureCache.size <= targetSize) {
+    return;
+  }
+
+  const evictable: Array<{ url: string; lastUsedAt: number }> = [];
+  tileTextureCache.forEach((entry, url) => {
+    if (entry.status === "loading" || activeSet.has(url)) {
+      return;
+    }
+    evictable.push({ url, lastUsedAt: entry.lastUsedAt });
+  });
+  evictable.sort((a, b) => a.lastUsedAt - b.lastUsedAt);
+
+  let removeCount = tileTextureCache.size - targetSize;
+  for (const candidate of evictable) {
+    if (removeCount <= 0) {
+      break;
+    }
+    const entry = tileTextureCache.get(candidate.url);
+    if (!entry || entry.status === "loading" || activeSet.has(candidate.url)) {
+      continue;
+    }
+    disposeTileTextureCacheEntry(entry);
+    tileTextureCache.delete(candidate.url);
+    removeCount -= 1;
+  }
+}
+
+function clearTileTextureCache() {
+  tileTextureCacheEpoch += 1;
+  tileTextureCache.forEach((entry) => disposeTileTextureCacheEntry(entry));
+  tileTextureCache.clear();
+}
+
 function getLoadedTileTexture(url: string): THREE.Texture | null {
   const cached = tileTextureCache.get(url);
   if (!cached || cached.status !== "loaded" || !cached.texture) {
     return null;
   }
+  markTileTextureUsed(cached);
   return cached.texture;
 }
 
 function ensureTileTexture(url: string): Promise<THREE.Texture> {
+  const requestEpoch = tileTextureCacheEpoch;
   const existing = tileTextureCache.get(url);
   if (existing?.status === "loaded" && existing.texture) {
+    markTileTextureUsed(existing);
     return Promise.resolve(existing.texture);
   }
   if (existing?.status === "loading" && existing.promise) {
+    markTileTextureUsed(existing);
     return existing.promise;
+  }
+  if (existing?.status === "error") {
+    markTileTextureUsed(existing);
   }
 
   const promise = new Promise<THREE.Texture>((resolve, reject) => {
@@ -216,29 +276,49 @@ function ensureTileTexture(url: string): Promise<THREE.Texture> {
       url,
       (texture) => {
         configureTileTexture(texture);
+        if (requestEpoch !== tileTextureCacheEpoch) {
+          texture.dispose();
+          reject(new Error("stale-tile-request"));
+          return;
+        }
         tileTextureCache.set(url, {
           status: "loaded",
           texture,
-          promise: null
+          promise: null,
+          lastUsedAt: performance.now()
         });
         resolve(texture);
       },
       undefined,
       (error) => {
+        if (requestEpoch !== tileTextureCacheEpoch) {
+          reject(error);
+          return;
+        }
+        const previous = tileTextureCache.get(url);
+        if (previous) {
+          disposeTileTextureCacheEntry(previous);
+        }
         tileTextureCache.set(url, {
           status: "error",
           texture: null,
-          promise: null
+          promise: null,
+          lastUsedAt: performance.now()
         });
         reject(error);
       }
     );
   });
 
+  const previous = tileTextureCache.get(url);
+  if (previous) {
+    disposeTileTextureCacheEntry(previous);
+  }
   tileTextureCache.set(url, {
     status: "loading",
     texture: null,
-    promise
+    promise,
+    lastUsedAt: performance.now()
   });
 
   return promise;
@@ -295,6 +375,11 @@ function smoothLookAheadMs(previousMs: number, nextMs: number): number {
   }
   const alpha = nextMs < previousMs ? 0.36 : 0.2;
   return previousMs + (nextMs - previousMs) * alpha;
+}
+
+function easeOutCubic(tRaw: number): number {
+  const t = clamp(tRaw, 0, 1);
+  return 1 - Math.pow(1 - t, 3);
 }
 
 function resolveInterpolatedLeadLocalPoint(
@@ -434,16 +519,30 @@ function percentile(sorted: number[], p: number): number {
   return lowerValue + (upperValue - lowerValue) * alpha;
 }
 
-const SPEED_COLOR_SLOW = new THREE.Color("#6f8cff");
-const SPEED_COLOR_MID = new THREE.Color("#6ecdb9");
-const SPEED_COLOR_FAST = new THREE.Color("#ffc07a");
+const SPEED_COLOR_SLOW: [number, number, number] = [0.4352941176, 0.5490196078, 1];
+const SPEED_COLOR_MID: [number, number, number] = [0.431372549, 0.8039215686, 0.7254901961];
+const SPEED_COLOR_FAST: [number, number, number] = [1, 0.7529411765, 0.4784313725];
+const TRACK_OUTER_GLOW: [number, number, number] = [0.9568627451, 0.9843137255, 1];
 
-function speedColorFromNormalized(normalizedSpeed: number): THREE.Color {
+function mixRgb(
+  a: [number, number, number],
+  b: [number, number, number],
+  tRaw: number
+): [number, number, number] {
+  const t = clamp(tRaw, 0, 1);
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t
+  ];
+}
+
+function speedColorFromNormalized(normalizedSpeed: number): [number, number, number] {
   const t = clamp(normalizedSpeed, 0, 1);
   if (t <= 0.58) {
-    return SPEED_COLOR_SLOW.clone().lerp(SPEED_COLOR_MID, t / 0.58);
+    return mixRgb(SPEED_COLOR_SLOW, SPEED_COLOR_MID, t / 0.58);
   }
-  return SPEED_COLOR_MID.clone().lerp(SPEED_COLOR_FAST, (t - 0.58) / 0.42);
+  return mixRgb(SPEED_COLOR_MID, SPEED_COLOR_FAST, (t - 0.58) / 0.42);
 }
 
 function interpolateLocalTrackPoint(
@@ -1084,13 +1183,18 @@ export function Viewer3D({
   onToggleViewMode,
   onSelect
 }: Viewer3DProps) {
-  const { t } = useTranslation();
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const manualFollowUntilRef = useRef(0);
   const lookAheadMsRef = useRef(FOLLOW_LOOK_AHEAD_DEFAULT_MS);
   const tileTransitionJobRef = useRef(0);
   const prevRenderedTileZoomRef = useRef<number | null>(null);
   const lastTileViewportUpdateMsRef = useRef(0);
+  const cameraNavAnimationFrameRef = useRef<number | null>(null);
+  const cameraNavStartPositionRef = useRef(new THREE.Vector3());
+  const cameraNavEndPositionRef = useRef(new THREE.Vector3());
+  const cameraNavStartTargetRef = useRef(new THREE.Vector3());
+  const cameraNavEndTargetRef = useRef(new THREE.Vector3());
+  const [cameraBearingDeg, setCameraBearingDeg] = useState(0);
   const [tileViewport, setTileViewport] = useState<TileViewport>({
     centerX: 0,
     centerY: 0,
@@ -1474,7 +1578,6 @@ export function Viewer3D({
 
     const outerSegmentColors: Array<[number, number, number, number]> = [];
     const innerSegmentColors: Array<[number, number, number, number]> = [];
-    const outerGlowAnchor = new THREE.Color("#f4fbff");
     const minSpeed = speedScale.min;
     const maxSpeed = speedScale.max;
 
@@ -1483,13 +1586,14 @@ export function Viewer3D({
       const fade = isPlaying ? 0.14 + 0.86 * Math.pow(age, 0.86) : 1;
       const normalizedSpeed = clamp((segmentSpeeds[i] - minSpeed) / (maxSpeed - minSpeed), 0, 1);
       const innerColor = speedColorFromNormalized(normalizedSpeed);
-      const outerBlend = isPlaying ? 0.58 + age * 0.12 : 0.56;
-      const outerColor = innerColor.clone().lerp(outerGlowAnchor, outerBlend);
+      const shadedInnerColor = mixRgb(innerColor, [0, 0, 0], TRACK_INNER_SHADE_3D);
+      const outerBlend = isPlaying ? 0.22 + age * 0.05 : 0.2;
+      const outerColor = mixRgb(shadedInnerColor, TRACK_OUTER_GLOW, outerBlend);
 
-      const innerAlpha = isPlaying ? 0.06 + 0.94 * fade : 0.95;
-      const outerAlpha = isPlaying ? 0.05 + 0.56 * fade : 0.66;
-      innerSegmentColors.push([innerColor.r, innerColor.g, innerColor.b, innerAlpha]);
-      outerSegmentColors.push([outerColor.r, outerColor.g, outerColor.b, outerAlpha]);
+      const innerAlpha = isPlaying ? 0.88 + 0.12 * fade : 1;
+      const outerAlpha = isPlaying ? 0.015 + 0.16 * fade : 0.18;
+      innerSegmentColors.push([shadedInnerColor[0], shadedInnerColor[1], shadedInnerColor[2], innerAlpha]);
+      outerSegmentColors.push([outerColor[0], outerColor[1], outerColor[2], outerAlpha]);
     }
 
     const samplesPerSegment = isPlaying ? PLAYBACK_SMOOTH_SAMPLES_PER_SEGMENT : 2;
@@ -1607,6 +1711,9 @@ export function Viewer3D({
         return;
       }
       setRenderTilePlanes(tilePlanes);
+      const activeTileUrls = new Set(tilePlanes.map((tile) => tile.url));
+      renderTilePlanesRef.current.forEach((tile) => activeTileUrls.add(tile.url));
+      pruneTileTextureCache(activeTileUrls);
     });
   }, [tilePlanes, tileViewport.token, sceneData.hasProjection]);
 
@@ -1629,12 +1736,46 @@ export function Viewer3D({
     };
   }, [tileViewport.coverageMeters, sceneData.xySpan]);
 
+  const syncCameraBearingFromControls = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+
+    const camera = controls.object as THREE.PerspectiveCamera;
+    const forward = new THREE.Vector3().copy(controls.target).sub(camera.position);
+    forward.z = 0;
+    if (forward.lengthSq() < 1e-6) {
+      setCameraBearingDeg(0);
+      return;
+    }
+
+    const nextBearing = normalizeAngleDeg((Math.atan2(forward.x, forward.y) * RAD_TO_DEG));
+    setCameraBearingDeg((prev) => (Math.abs(angleDiffDeg(nextBearing, prev)) < 0.1 ? prev : nextBearing));
+  }, []);
+
+  const stopCameraNavigationAnimation = useCallback(() => {
+    if (cameraNavAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(cameraNavAnimationFrameRef.current);
+      cameraNavAnimationFrameRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopCameraNavigationAnimation();
+      tileTransitionJobRef.current += 1;
+      clearTileTextureCache();
+    };
+  }, [stopCameraNavigationAnimation]);
+
   const syncTileViewportFromControls = useCallback(() => {
     const controls = controlsRef.current;
     if (!controls || !sceneData.hasProjection) {
       return;
     }
 
+    syncCameraBearingFromControls();
     const camera = controls.object as THREE.PerspectiveCamera;
     const target = controls.target;
     const nextCoverage = pickDynamicCoverageMeters(camera.position.distanceTo(target), sceneData.xySpan);
@@ -1662,7 +1803,54 @@ export function Viewer3D({
         token: nextToken
       };
     });
-  }, [sceneData.hasProjection, sceneData.xySpan]);
+  }, [sceneData.hasProjection, sceneData.xySpan, syncCameraBearingFromControls]);
+
+  const animateCameraTo = useCallback((nextPosition: THREE.Vector3, nextTarget: THREE.Vector3) => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+
+    stopCameraNavigationAnimation();
+
+    const camera = controls.object as THREE.PerspectiveCamera;
+    cameraNavStartPositionRef.current.copy(camera.position);
+    cameraNavEndPositionRef.current.copy(nextPosition);
+    cameraNavStartTargetRef.current.copy(controls.target);
+    cameraNavEndTargetRef.current.copy(nextTarget);
+
+    const startedAt = performance.now();
+    const tick = () => {
+      const innerControls = controlsRef.current;
+      if (!innerControls) {
+        cameraNavAnimationFrameRef.current = null;
+        return;
+      }
+
+      const innerCamera = innerControls.object as THREE.PerspectiveCamera;
+      const elapsed = performance.now() - startedAt;
+      const progress = clamp(elapsed / CAMERA_NAV_ANIMATION_MS, 0, 1);
+      const eased = easeOutCubic(progress);
+
+      innerCamera.position.copy(
+        cameraNavStartPositionRef.current.clone().lerp(cameraNavEndPositionRef.current, eased)
+      );
+      innerControls.target.copy(
+        cameraNavStartTargetRef.current.clone().lerp(cameraNavEndTargetRef.current, eased)
+      );
+      innerControls.update();
+      syncCameraBearingFromControls();
+      syncTileViewportFromControls();
+
+      if (progress >= 1) {
+        cameraNavAnimationFrameRef.current = null;
+        return;
+      }
+      cameraNavAnimationFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    cameraNavAnimationFrameRef.current = window.requestAnimationFrame(tick);
+  }, [stopCameraNavigationAnimation, syncCameraBearingFromControls, syncTileViewportFromControls]);
 
   const handleControlsStart = useCallback(() => {
     manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
@@ -1673,6 +1861,8 @@ export function Viewer3D({
     if (!controls) {
       return;
     }
+
+    stopCameraNavigationAnimation();
 
     const target = new THREE.Vector3(...sceneData.target);
     const baseDistance = Math.max(100, sceneData.xySpan * 1.05);
@@ -1686,10 +1876,66 @@ export function Viewer3D({
 
     controls.target.copy(target);
     controls.update();
+    syncCameraBearingFromControls();
     syncTileViewportFromControls();
   },
-    [sceneData.target, sceneData.xySpan, syncTileViewportFromControls]
+    [sceneData.target, sceneData.xySpan, stopCameraNavigationAnimation, syncCameraBearingFromControls, syncTileViewportFromControls]
   );
+
+  const handleZoomIn = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+    const camera = controls.object as THREE.PerspectiveCamera;
+    const offset = new THREE.Vector3().copy(camera.position).sub(controls.target);
+    if (offset.lengthSq() < 1e-6) {
+      return;
+    }
+
+    const nextDistance = clamp(offset.length() * 0.82, controls.minDistance, controls.maxDistance);
+    offset.setLength(nextDistance);
+    animateCameraTo(new THREE.Vector3().copy(controls.target).add(offset), controls.target.clone());
+  }, [animateCameraTo]);
+
+  const handleZoomOut = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+    const camera = controls.object as THREE.PerspectiveCamera;
+    const offset = new THREE.Vector3().copy(camera.position).sub(controls.target);
+    if (offset.lengthSq() < 1e-6) {
+      return;
+    }
+
+    const nextDistance = clamp(offset.length() * 1.22, controls.minDistance, controls.maxDistance);
+    offset.setLength(nextDistance);
+    animateCameraTo(new THREE.Vector3().copy(controls.target).add(offset), controls.target.clone());
+  }, [animateCameraTo]);
+
+  const handleResetNorth = useCallback(() => {
+    const controls = controlsRef.current;
+    if (!controls) {
+      return;
+    }
+
+    manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
+    const camera = controls.object as THREE.PerspectiveCamera;
+    const offset = new THREE.Vector3().copy(camera.position).sub(controls.target);
+    const horizontalDistance = Math.max(1, Math.hypot(offset.x, offset.y));
+    const nextPosition = new THREE.Vector3(
+      controls.target.x,
+      controls.target.y - horizontalDistance,
+      controls.target.z + offset.z
+    );
+    camera.up.set(0, 0, 1);
+    animateCameraTo(nextPosition, controls.target.clone());
+  }, [animateCameraTo]);
 
   useEffect(() => {
     fitCameraToScene();
@@ -1735,18 +1981,20 @@ export function Viewer3D({
             <Line
               points={cometLineData.points}
               vertexColors={cometLineData.outerColors}
-              lineWidth={Math.max(2.8, trackWidth * 3.2)}
+              lineWidth={Math.max(TRACK_OUTER_MIN_WIDTH_3D, trackWidth * TRACK_OUTER_WIDTH_3D)}
               worldUnits
               transparent
               depthWrite={false}
+              renderOrder={1}
             />
             <Line
               points={cometLineData.points}
               vertexColors={cometLineData.innerColors}
-              lineWidth={Math.max(1.15, trackWidth * 1.45)}
+              lineWidth={Math.max(TRACK_INNER_MIN_WIDTH_3D, trackWidth * TRACK_INNER_WIDTH_3D)}
               worldUnits
               transparent
-              depthWrite={false}
+              depthWrite
+              renderOrder={2}
             />
           </>
         ) : null}
@@ -1803,42 +2051,13 @@ export function Viewer3D({
         />
       </Canvas>
 
-      <Paper
-        variant="outlined"
-        aria-hidden="true"
-        sx={{
-          position: "absolute",
-          right: 12,
-          top: 12,
-          zIndex: 5,
-          borderRadius: 1,
-          px: 1.1,
-          py: 0.6,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.8,
-          backdropFilter: "blur(3px)",
-          bgcolor: (theme) =>
-            theme.palette.mode === "dark"
-              ? alpha(theme.palette.background.paper, 0.74)
-              : alpha(theme.palette.background.paper, 0.92)
-        }}
-      >
-        <Typography variant="caption" color="text.secondary">
-          {t("viewer3d.slow", { defaultValue: "Slow" })}
-        </Typography>
-        <Box
-          sx={{
-            width: 92,
-            height: 8,
-            borderRadius: 999,
-            background: "linear-gradient(90deg, #6f8cff 0%, #6ecdb9 56%, #ffc07a 100%)"
-          }}
-        />
-        <Typography variant="caption" color="text.secondary">
-          {t("viewer3d.fast", { defaultValue: "Fast" })}
-        </Typography>
-      </Paper>
+      <ViewerSpeedLegend />
+      <ViewerNavigationControls
+        bearingDeg={cameraBearingDeg}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onResetNorth={handleResetNorth}
+      />
 
       <ViewerCornerControls
         viewMode="3d"

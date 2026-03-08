@@ -1,17 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Box, CssBaseline, ThemeProvider, Typography } from "@mui/material";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Box, CircularProgress, CssBaseline, ThemeProvider, Typography } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import i18n from "./i18n";
 import { TopToolbar } from "./components/topbar/TopToolbar";
-import { Viewer2D } from "./components/viewer/Viewer2D";
-import { Viewer3D } from "./components/viewer/Viewer3D";
 import { PointDetailPanel } from "./components/sidebar/PointDetailPanel";
 import { PlaybackBar } from "./components/playback/PlaybackBar";
-import { parseEdgeTxCsv } from "./lib/csv/parseEdgeTxCsv";
 import { buildSmoothedTrack } from "./lib/math/smoothPath";
 import { resolvePlaybackCursor } from "./lib/playback/playbackEngine";
 import { playbackSpeedOptions, useViewerStore } from "./store/viewerStore";
 import { createAppTheme } from "./theme/muiTheme";
+
+const Viewer2D = lazy(async () => {
+  const module = await import("./components/viewer/Viewer2D");
+  return { default: module.Viewer2D };
+});
+
+const Viewer3D = lazy(async () => {
+  const module = await import("./components/viewer/Viewer3D");
+  return { default: module.Viewer3D };
+});
 
 export default function App() {
   const { t } = useTranslation();
@@ -77,7 +84,7 @@ export default function App() {
   }, [setIsFullscreen]);
 
   useEffect(() => {
-    if (!playback.isPlaying) {
+    if (!playback.isPlaying || points.length === 0 || playback.speed <= 0) {
       return;
     }
 
@@ -98,6 +105,7 @@ export default function App() {
   const handleUpload = async (file: File) => {
     setIsLoading(true);
     try {
+      const { parseEdgeTxCsv } = await import("./lib/csv/parseEdgeTxCsv");
       const parsed = await parseEdgeTxCsv(file);
       setData(parsed);
     } finally {
@@ -204,44 +212,65 @@ export default function App() {
               bgcolor: "background.paper"
             }}
           >
-            {viewMode === "2d" ? (
-              <Viewer2D
-                points={points}
-                smoothedTrack={smoothedTrack}
-                selectedIndex={selectedIndexForView}
-                currentIndex={playback.currentIndex}
-                playbackCursor={playbackCursor}
-                isPlaying={playback.isPlaying}
-                autoFollowMode={autoFollowMode}
-                frontFollowMode={frontFollowMode}
-                mapProvider={mapProvider}
-                mapStyle={mapStyle}
-                trackWidth={trackWidth}
-                setAutoFollowMode={setAutoFollowMode}
-                setFrontFollowMode={setFrontFollowMode}
-                onToggleViewMode={() => setViewMode("3d")}
-                onSelect={handlePointSelect}
-              />
-            ) : (
-              <Viewer3D
-                points={points}
-                altitudeMode={altitudeMode}
-                mapProvider={mapProvider}
-                mapStyle={mapStyle}
-                zScale={zScale}
-                selectedIndex={selectedIndexForView}
-                currentIndex={playback.currentIndex}
-                playbackCursor={playbackCursor}
-                isPlaying={playback.isPlaying}
-                autoFollowMode={autoFollowMode}
-                frontFollowMode={frontFollowMode}
-                trackWidth={trackWidth}
-                setAutoFollowMode={setAutoFollowMode}
-                setFrontFollowMode={setFrontFollowMode}
-                onToggleViewMode={() => setViewMode("2d")}
-                onSelect={handlePointSelect}
-              />
-            )}
+            <Suspense
+              fallback={
+                <Box
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "grid",
+                    placeItems: "center",
+                    gap: 1,
+                    alignContent: "center",
+                    bgcolor: "background.paper"
+                  }}
+                >
+                  <CircularProgress size={26} />
+                  <Typography variant="body2" color="text.secondary">
+                    Loading viewer...
+                  </Typography>
+                </Box>
+              }
+            >
+              {viewMode === "2d" ? (
+                <Viewer2D
+                  points={points}
+                  smoothedTrack={smoothedTrack}
+                  selectedIndex={selectedIndexForView}
+                  currentIndex={playback.currentIndex}
+                  playbackCursor={playbackCursor}
+                  isPlaying={playback.isPlaying}
+                  autoFollowMode={autoFollowMode}
+                  frontFollowMode={frontFollowMode}
+                  mapProvider={mapProvider}
+                  mapStyle={mapStyle}
+                  trackWidth={trackWidth}
+                  setAutoFollowMode={setAutoFollowMode}
+                  setFrontFollowMode={setFrontFollowMode}
+                  onToggleViewMode={() => setViewMode("3d")}
+                  onSelect={handlePointSelect}
+                />
+              ) : (
+                <Viewer3D
+                  points={points}
+                  altitudeMode={altitudeMode}
+                  mapProvider={mapProvider}
+                  mapStyle={mapStyle}
+                  zScale={zScale}
+                  selectedIndex={selectedIndexForView}
+                  currentIndex={playback.currentIndex}
+                  playbackCursor={playbackCursor}
+                  isPlaying={playback.isPlaying}
+                  autoFollowMode={autoFollowMode}
+                  frontFollowMode={frontFollowMode}
+                  trackWidth={trackWidth}
+                  setAutoFollowMode={setAutoFollowMode}
+                  setFrontFollowMode={setFrontFollowMode}
+                  onToggleViewMode={() => setViewMode("2d")}
+                  onSelect={handlePointSelect}
+                />
+              )}
+            </Suspense>
 
             {points.length === 0 ? (
               <Box
