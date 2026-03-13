@@ -1,6 +1,6 @@
 import UploadFileRoundedIcon from "@mui/icons-material/UploadFileRounded";
 import { Button } from "@mui/material";
-import { useRef } from "react";
+import { useId } from "react";
 
 interface UploadButtonProps {
   label: string;
@@ -8,23 +8,27 @@ interface UploadButtonProps {
 }
 
 export function UploadButton({ label, onFileSelected }: UploadButtonProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
+  const triggerId = `${inputId}-trigger`;
 
   return (
     <>
       <Button
+        component="label"
+        htmlFor={inputId}
+        id={triggerId}
         variant="contained"
         size="small"
         startIcon={<UploadFileRoundedIcon fontSize="small" />}
-        onClick={() => inputRef.current?.click()}
       >
         {label}
       </Button>
       <input
-        ref={inputRef}
+        id={inputId}
         className="hidden-file-input"
         type="file"
         accept=".csv,text/csv"
+        aria-labelledby={triggerId}
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (file) {

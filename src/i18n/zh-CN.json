@@ -23,7 +23,9 @@
     "dark": "暗黑",
     "light": "明亮",
     "trackWidth": "轨迹粗细",
+    "trackWidthValue": "轨迹粗细 {{value}}",
     "zScale": "Z 缩放",
+    "zScaleValue": "Z 缩放 {{value}}",
     "fullscreen": "全屏",
     "mapSource": "地图源",
     "sourceOsm": "OpenStreetMap",
@@ -38,7 +40,9 @@
     "faster": "加速",
     "speed": "速度",
     "frame": "帧",
-    "time": "时间"
+    "time": "时间",
+    "seek": "拖动回放时间轴",
+    "seekValue": "第 {{current}} 帧，共 {{total}} 帧"
   },
   "panel": {
     "title": "轨迹点详情",
@@ -54,6 +58,17 @@
     "field": "字段",
     "value": "值",
     "noData": "暂无数据"
+  },
+  "viewer": {
+    "switchTo2d": "切换到 2D 视图",
+    "switchTo3d": "切换到 3D 视图",
+    "followModes": "跟随模式",
+    "followAuto": "启用自动跟随",
+    "followFront": "保持镜头朝向轨迹前进方向",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "resetNorth": "将地图朝向重置为正北。当前朝向 {{heading}} 度",
+    "northHeading": "正北，{{heading}} 度"
   },
   "viewer3d": {
     "slow": "慢",

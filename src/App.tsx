@@ -27,7 +27,6 @@ export default function App() {
 
   const points = useViewerStore((state) => state.points);
   const errors = useViewerStore((state) => state.errors);
-  const selectedIndex = useViewerStore((state) => state.selectedIndex);
   const playback = useViewerStore((state) => state.playback);
   const viewMode = useViewerStore((state) => state.viewMode);
   const mapProvider = useViewerStore((state) => state.mapProvider);
@@ -43,7 +42,6 @@ export default function App() {
   const playbackCarryMs = useViewerStore((state) => state.playbackCarryMs);
 
   const setData = useViewerStore((state) => state.setData);
-  const setSelectedIndex = useViewerStore((state) => state.setSelectedIndex);
   const setCurrentIndex = useViewerStore((state) => state.setCurrentIndex);
   const togglePlay = useViewerStore((state) => state.togglePlay);
   const setSpeed = useViewerStore((state) => state.setSpeed);
@@ -67,8 +65,8 @@ export default function App() {
     }
     return resolvePlaybackCursor(points, playback.currentIndex, playbackCarryMs);
   }, [points, playback.currentIndex, playback.isPlaying, playbackCarryMs]);
-  const selectedIndexForView = playback.isPlaying ? playback.currentIndex : selectedIndex;
-  const activeDetailPoint = points[selectedIndexForView] ?? points[playback.currentIndex] ?? null;
+  const activeDetailPoint = points[playback.currentIndex] ?? null;
+  const hasData = points.length > 0;
   const muiTheme = useMemo(() => createAppTheme(theme), [theme]);
 
   useEffect(() => {
@@ -113,13 +111,6 @@ export default function App() {
     }
   };
 
-  const handlePointSelect = (index: number) => {
-    setSelectedIndex(index);
-    if (playback.isPlaying) {
-      setCurrentIndex(index);
-    }
-  };
-
   const handleToggleFullscreen = async () => {
     try {
       if (!document.fullscreenElement) {
@@ -135,7 +126,6 @@ export default function App() {
   const handlePlayPause = () => {
     if (!playback.isPlaying && points.length > 0 && playback.currentIndex >= points.length - 1) {
       setCurrentIndex(0);
-      setSelectedIndex(0);
     }
     togglePlay();
   };
@@ -194,14 +184,16 @@ export default function App() {
           sx={{
             minHeight: 0,
             flex: 1,
-            display: "grid",
+            display: { xs: "flex", lg: "grid" },
+            flexDirection: "column",
             gap: 1,
-            gridTemplateColumns: { xs: "minmax(0, 1fr)", lg: "minmax(0, 1fr) 300px" },
-            gridTemplateRows: { xs: "minmax(0, 1fr) minmax(240px, 36vh)", lg: "minmax(0, 1fr)" }
+            gridTemplateColumns: hasData ? "minmax(0, 1fr) 300px" : "minmax(0, 1fr)",
+            gridTemplateRows: "minmax(0, 1fr)"
           }}
         >
           <Box
             sx={{
+              flex: 1,
               minWidth: 0,
               minHeight: 0,
               position: "relative",
@@ -236,7 +228,6 @@ export default function App() {
                 <Viewer2D
                   points={points}
                   smoothedTrack={smoothedTrack}
-                  selectedIndex={selectedIndexForView}
                   currentIndex={playback.currentIndex}
                   playbackCursor={playbackCursor}
                   isPlaying={playback.isPlaying}
@@ -248,7 +239,6 @@ export default function App() {
                   setAutoFollowMode={setAutoFollowMode}
                   setFrontFollowMode={setFrontFollowMode}
                   onToggleViewMode={() => setViewMode("3d")}
-                  onSelect={handlePointSelect}
                 />
               ) : (
                 <Viewer3D
@@ -257,7 +247,6 @@ export default function App() {
                   mapProvider={mapProvider}
                   mapStyle={mapStyle}
                   zScale={zScale}
-                  selectedIndex={selectedIndexForView}
                   currentIndex={playback.currentIndex}
                   playbackCursor={playbackCursor}
                   isPlaying={playback.isPlaying}
@@ -267,12 +256,11 @@ export default function App() {
                   setAutoFollowMode={setAutoFollowMode}
                   setFrontFollowMode={setFrontFollowMode}
                   onToggleViewMode={() => setViewMode("2d")}
-                  onSelect={handlePointSelect}
                 />
               )}
             </Suspense>
 
-            {points.length === 0 ? (
+            {!hasData ? (
               <Box
                 sx={{
                   position: "absolute",
@@ -308,26 +296,31 @@ export default function App() {
             ) : null}
           </Box>
 
-          <PointDetailPanel point={activeDetailPoint} language={language} />
+          {hasData ? (
+            <Box sx={{ width: "100%", flexShrink: 0 }}>
+              <PointDetailPanel point={activeDetailPoint} language={language} />
+            </Box>
+          ) : null}
         </Box>
 
-        <PlaybackBar
-          total={points.length}
-          currentIndex={playback.currentIndex}
-          isPlaying={playback.isPlaying}
-          speed={playback.speed}
-          currentTimestamp={points[playback.currentIndex]?.timestampMs ?? null}
-          startTimestamp={points[0]?.timestampMs ?? null}
-          endTimestamp={points[points.length - 1]?.timestampMs ?? null}
-          onDecreaseSpeed={() => handleAdjustSpeed(-1)}
-          onPlayPause={handlePlayPause}
-          onIncreaseSpeed={() => handleAdjustSpeed(1)}
-          onSpeedChange={setSpeed}
-          onSeek={(index) => {
-            setCurrentIndex(index);
-            setSelectedIndex(index);
-          }}
-        />
+        {hasData ? (
+          <PlaybackBar
+            total={points.length}
+            currentIndex={playback.currentIndex}
+            isPlaying={playback.isPlaying}
+            speed={playback.speed}
+            currentTimestamp={points[playback.currentIndex]?.timestampMs ?? null}
+            startTimestamp={points[0]?.timestampMs ?? null}
+            endTimestamp={points[points.length - 1]?.timestampMs ?? null}
+            onDecreaseSpeed={() => handleAdjustSpeed(-1)}
+            onPlayPause={handlePlayPause}
+            onIncreaseSpeed={() => handleAdjustSpeed(1)}
+            onSpeedChange={setSpeed}
+            onSeek={(index) => {
+              setCurrentIndex(index);
+            }}
+          />
+        ) : null}
       </Box>
     </ThemeProvider>
   );

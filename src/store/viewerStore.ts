@@ -30,7 +30,6 @@ interface ViewerState {
   headers: string[];
   points: FlightPoint[];
   errors: string[];
-  selectedIndex: number;
   playback: {
     isPlaying: boolean;
     currentIndex: number;
@@ -49,7 +48,6 @@ interface ViewerState {
   isFullscreen: boolean;
   playbackCarryMs: number;
   setData: (payload: { headers: string[]; points: FlightPoint[]; errors: string[] }) => void;
-  setSelectedIndex: (index: number) => void;
   setCurrentIndex: (index: number) => void;
   stepFrame: (delta: number) => void;
   togglePlay: () => void;
@@ -73,7 +71,6 @@ export const useViewerStore = create<ViewerState>((set) => ({
   headers: [],
   points: [],
   errors: [],
-  selectedIndex: 0,
   playback: {
     isPlaying: false,
     currentIndex: 0,
@@ -97,18 +94,12 @@ export const useViewerStore = create<ViewerState>((set) => ({
       headers,
       points,
       errors,
-      selectedIndex: 0,
       playback: {
         isPlaying: false,
         currentIndex: 0,
         speed: 1
       },
       playbackCarryMs: 0
-    })),
-
-  setSelectedIndex: (index) =>
-    set((state) => ({
-      selectedIndex: Math.max(0, Math.min(state.points.length - 1, index))
     })),
 
   setCurrentIndex: (index) =>

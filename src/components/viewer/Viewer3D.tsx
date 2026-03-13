@@ -24,7 +24,6 @@ interface Viewer3DProps {
   mapProvider: MapProvider;
   mapStyle: MapStyleMode;
   zScale: number;
-  selectedIndex: number;
   currentIndex: number;
   playbackCursor: number;
   isPlaying: boolean;
@@ -34,7 +33,6 @@ interface Viewer3DProps {
   setAutoFollowMode: (enabled: boolean) => void;
   setFrontFollowMode: (enabled: boolean) => void;
   onToggleViewMode: () => void;
-  onSelect: (index: number) => void;
 }
 
 interface DisplayGeoPoint {
@@ -57,7 +55,6 @@ interface MarkerData {
   index: number;
   role: "start" | "middle" | "end";
   isCurrent: boolean;
-  isSelected: boolean;
   position: [number, number, number];
 }
 
@@ -243,7 +240,9 @@ function pruneTileTextureCache(activeUrls: Iterable<string>) {
 
 function clearTileTextureCache() {
   tileTextureCacheEpoch += 1;
-  tileTextureCache.forEach((entry) => disposeTileTextureCacheEntry(entry));
+  tileTextureCache.forEach((entry) => {
+    disposeTileTextureCacheEntry(entry);
+  });
   tileTextureCache.clear();
 }
 
@@ -691,9 +690,6 @@ function markerColor(marker: MarkerData): string {
   if (marker.isCurrent) {
     return "#ffe39a";
   }
-  if (marker.isSelected) {
-    return "#f7fbff";
-  }
   if (marker.role === "start") {
     return "#53d584";
   }
@@ -706,9 +702,6 @@ function markerColor(marker: MarkerData): string {
 function markerRadius(marker: MarkerData, trackWidth: number): number {
   if (marker.isCurrent) {
     return 1.22 * trackWidth;
-  }
-  if (marker.isSelected) {
-    return 1.55 * trackWidth;
   }
   if (marker.role === "start" || marker.role === "end") {
     return 1.35 * trackWidth;
@@ -917,7 +910,7 @@ function GroundHaze({
         transparent: true,
         depthWrite: false
       }),
-    []
+    [radius]
   );
 
   useEffect(() => {
@@ -1171,7 +1164,6 @@ export function Viewer3D({
   mapProvider,
   mapStyle,
   zScale,
-  selectedIndex,
   currentIndex,
   playbackCursor,
   isPlaying,
@@ -1180,8 +1172,7 @@ export function Viewer3D({
   trackWidth,
   setAutoFollowMode,
   setFrontFollowMode,
-  onToggleViewMode,
-  onSelect
+  onToggleViewMode
 }: Viewer3DProps) {
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
   const manualFollowUntilRef = useRef(0);
@@ -1203,10 +1194,6 @@ export function Viewer3D({
   });
   const [renderTilePlanes, setRenderTilePlanes] = useState<TilePlaneData[]>([]);
   const renderTilePlanesRef = useRef<TilePlaneData[]>([]);
-
-  useEffect(() => {
-    lookAheadMsRef.current = FOLLOW_LOOK_AHEAD_DEFAULT_MS;
-  }, [points.length, mapProvider, altitudeMode, zScale]);
 
   const displayGeoPoints = useMemo<DisplayGeoPoint[]>(() => {
     return points.map((point) => {
@@ -1447,9 +1434,6 @@ export function Viewer3D({
     includeIndexes.add(0);
     includeIndexes.add(points.length - 1);
 
-    if (selectedIndex >= 0 && selectedIndex < points.length) {
-      includeIndexes.add(selectedIndex);
-    }
     if (currentIndex >= 0 && currentIndex < points.length) {
       includeIndexes.add(currentIndex);
     }
@@ -1469,7 +1453,6 @@ export function Viewer3D({
         index,
         role: index === 0 ? "start" : index === points.length - 1 ? "end" : "middle",
         isCurrent,
-        isSelected: index === selectedIndex,
         position: [markerPoint.x, markerPoint.y, markerPoint.z]
       });
     });
@@ -1479,7 +1462,6 @@ export function Viewer3D({
     sceneData.localTrackPoints,
     clampedPlaybackCursor,
     points,
-    selectedIndex,
     currentIndex
   ]);
 
@@ -1635,7 +1617,7 @@ export function Viewer3D({
       coverageMeters: baseCoverage,
       token: nextToken
     });
-  }, [sceneData.fitToken, sceneData.target, sceneData.xySpan]);
+  }, [sceneData.target, sceneData.xySpan]);
 
   const tilePlanes = useMemo(() => {
     if (!sceneData.hasProjection) {
@@ -1652,7 +1634,6 @@ export function Viewer3D({
     );
   }, [
     tileConfig.templates,
-    tileViewport.token,
     tileViewport.centerX,
     tileViewport.centerY,
     tileViewport.coverageMeters,
@@ -1699,8 +1680,12 @@ export function Viewer3D({
         const overlap = previous.filter((tile) => targetMap.has(tile.key));
         const loadedInTarget = tilePlanes.filter((tile) => getLoadedTileTexture(tile.url));
         const merged = new Map<string, TilePlaneData>();
-        overlap.forEach((tile) => merged.set(tile.key, tile));
-        loadedInTarget.forEach((tile) => merged.set(tile.key, tile));
+        overlap.forEach((tile) => {
+          merged.set(tile.key, tile);
+        });
+        loadedInTarget.forEach((tile) => {
+          merged.set(tile.key, tile);
+        });
         const next = Array.from(merged.values());
         return next.length > 0 ? next : previous;
       });
@@ -1712,10 +1697,12 @@ export function Viewer3D({
       }
       setRenderTilePlanes(tilePlanes);
       const activeTileUrls = new Set(tilePlanes.map((tile) => tile.url));
-      renderTilePlanesRef.current.forEach((tile) => activeTileUrls.add(tile.url));
+      renderTilePlanesRef.current.forEach((tile) => {
+        activeTileUrls.add(tile.url);
+      });
       pruneTileTextureCache(activeTileUrls);
     });
-  }, [tilePlanes, tileViewport.token, sceneData.hasProjection]);
+  }, [tilePlanes, sceneData.hasProjection]);
 
   const horizonVisual = useMemo(() => {
     const coverage = Math.max(tileViewport.coverageMeters, 2500);
@@ -1939,7 +1926,7 @@ export function Viewer3D({
 
   useEffect(() => {
     fitCameraToScene();
-  }, [sceneData.fitToken, fitCameraToScene]);
+  }, [fitCameraToScene]);
 
   return (
     <div className="viewer-canvas viewer-3d">
@@ -2017,19 +2004,12 @@ export function Viewer3D({
         ) : null}
 
         {markers.map((marker) => (
-          <mesh
-            key={marker.index}
-            position={marker.position}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              onSelect(marker.index);
-            }}
-          >
+          <mesh key={marker.index} position={marker.position}>
             <sphereGeometry args={[markerRadius(marker, trackWidth), 14, 14]} />
             <meshStandardMaterial
               color={markerColor(marker)}
-              emissive={marker.isCurrent ? "#715610" : marker.isSelected ? "#6f7a84" : "#000000"}
-              emissiveIntensity={marker.isCurrent ? 0.36 : marker.isSelected ? 0.24 : 0}
+              emissive={marker.isCurrent ? "#715610" : "#000000"}
+              emissiveIntensity={marker.isCurrent ? 0.36 : 0}
               roughness={0.4}
               metalness={0.06}
             />

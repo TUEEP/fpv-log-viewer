@@ -1,5 +1,7 @@
 import {
   Box,
+  FormControl,
+  InputLabel,
   MenuItem,
   Paper,
   Select,
@@ -7,6 +9,7 @@ import {
   Stack,
   Typography
 } from "@mui/material";
+import { useId } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   AltitudeMode,
@@ -63,6 +66,11 @@ export function TopToolbar({
   onToggleFullscreen
 }: TopToolbarProps) {
   const { t } = useTranslation();
+  const mapSourceLabelId = useId();
+  const mapStyleLabelId = useId();
+  const altitudeLabelId = useId();
+  const trackWidthLabelId = useId();
+  const zScaleLabelId = useId();
 
   return (
     <Paper
@@ -124,53 +132,53 @@ export function TopToolbar({
         flexWrap="wrap"
         alignItems="flex-end"
       >
-        <Box sx={{ minWidth: 136 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-            {t("toolbar.mapSource", { defaultValue: "Map Source" })}
-          </Typography>
+        <FormControl size="small" sx={{ minWidth: 136 }}>
+          <InputLabel id={mapSourceLabelId}>{t("toolbar.mapSource")}</InputLabel>
           <Select
+            labelId={mapSourceLabelId}
             size="small"
             value={mapProvider}
+            label={t("toolbar.mapSource")}
             onChange={(event) => setMapProvider(event.target.value as MapProvider)}
             fullWidth
           >
-            <MenuItem value="osm">{t("toolbar.sourceOsm", { defaultValue: "OpenStreetMap" })}</MenuItem>
-            <MenuItem value="amap">{t("toolbar.sourceAmap", { defaultValue: "Amap" })}</MenuItem>
+            <MenuItem value="osm">{t("toolbar.sourceOsm")}</MenuItem>
+            <MenuItem value="amap">{t("toolbar.sourceAmap")}</MenuItem>
           </Select>
-        </Box>
+        </FormControl>
 
-        <Box sx={{ minWidth: 116 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-            {t("toolbar.mapStyle")}
-          </Typography>
+        <FormControl size="small" sx={{ minWidth: 116 }}>
+          <InputLabel id={mapStyleLabelId}>{t("toolbar.mapStyle")}</InputLabel>
           <Select
+            labelId={mapStyleLabelId}
             size="small"
             value={mapStyle}
+            label={t("toolbar.mapStyle")}
             onChange={(event) => setMapStyle(event.target.value as MapStyleMode)}
             fullWidth
           >
             <MenuItem value="street">{t("toolbar.street")}</MenuItem>
             <MenuItem value="satellite">{t("toolbar.satellite")}</MenuItem>
           </Select>
-        </Box>
+        </FormControl>
 
-        <Box sx={{ minWidth: 116 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
-            {t("toolbar.altitude")}
-          </Typography>
+        <FormControl size="small" sx={{ minWidth: 116 }}>
+          <InputLabel id={altitudeLabelId}>{t("toolbar.altitude")}</InputLabel>
           <Select
+            labelId={altitudeLabelId}
             size="small"
             value={altitudeMode}
+            label={t("toolbar.altitude")}
             onChange={(event) => setAltitudeMode(event.target.value as AltitudeMode)}
             fullWidth
           >
             <MenuItem value="alt1">{t("toolbar.alt1")}</MenuItem>
             <MenuItem value="alt2">{t("toolbar.alt2")}</MenuItem>
           </Select>
-        </Box>
+        </FormControl>
 
         <Box sx={{ width: { xs: 130, sm: 146 } }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+          <Typography id={trackWidthLabelId} variant="caption" color="text.secondary" sx={{ display: "block" }}>
             {t("toolbar.trackWidth")}: {trackWidth.toFixed(1)}
           </Typography>
           <Slider
@@ -180,6 +188,10 @@ export function TopToolbar({
             step={0.1}
             value={trackWidth}
             valueLabelDisplay="auto"
+            aria-labelledby={trackWidthLabelId}
+            getAriaValueText={(value) =>
+              t("toolbar.trackWidthValue", { value: Number(value).toFixed(1) })
+            }
             onChange={(_, value) => {
               if (typeof value === "number") {
                 setTrackWidth(value);
@@ -190,7 +202,7 @@ export function TopToolbar({
 
         {viewMode === "3d" ? (
           <Box sx={{ width: { xs: 130, sm: 146 } }}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+            <Typography id={zScaleLabelId} variant="caption" color="text.secondary" sx={{ display: "block" }}>
               {t("toolbar.zScale")}: {zScale.toFixed(1)}
             </Typography>
             <Slider
@@ -200,6 +212,10 @@ export function TopToolbar({
               step={0.5}
               value={zScale}
               valueLabelDisplay="auto"
+              aria-labelledby={zScaleLabelId}
+              getAriaValueText={(value) =>
+                t("toolbar.zScaleValue", { value: Number(value).toFixed(1) })
+              }
               onChange={(_, value) => {
                 if (typeof value === "number") {
                   setZScale(value);

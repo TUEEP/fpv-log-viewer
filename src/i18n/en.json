@@ -23,7 +23,9 @@
     "dark": "Dark",
     "light": "Light",
     "trackWidth": "Track Width",
+    "trackWidthValue": "Track width {{value}}",
     "zScale": "Z Scale",
+    "zScaleValue": "Z scale {{value}}",
     "fullscreen": "Fullscreen",
     "mapSource": "Map Source",
     "sourceOsm": "OpenStreetMap",
@@ -38,7 +40,9 @@
     "frame": "Frame",
     "time": "Time",
     "slower": "Slower",
-    "faster": "Faster"
+    "faster": "Faster",
+    "seek": "Seek playback timeline",
+    "seekValue": "Frame {{current}} of {{total}}"
   },
   "panel": {
     "title": "Track Point Details",
@@ -54,6 +58,17 @@
     "field": "Field",
     "value": "Value",
     "noData": "No data."
+  },
+  "viewer": {
+    "switchTo2d": "Switch to 2D view",
+    "switchTo3d": "Switch to 3D view",
+    "followModes": "Follow modes",
+    "followAuto": "Enable auto follow",
+    "followFront": "Keep camera facing the track direction",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "resetNorth": "Reset map orientation to north. Current heading {{heading}} degrees",
+    "northHeading": "North, {{heading}} degrees"
   },
   "viewer3d": {
     "slow": "Slow",

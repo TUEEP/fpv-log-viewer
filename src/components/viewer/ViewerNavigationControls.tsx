@@ -3,6 +3,7 @@ import ExploreRoundedIcon from "@mui/icons-material/ExploreRounded";
 import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
 import { Box, ButtonBase, Paper, Stack, Tooltip, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { useTranslation } from "react-i18next";
 
 interface ViewerNavigationControlsProps {
   bearingDeg: number;
@@ -17,6 +18,7 @@ export function ViewerNavigationControls({
   onZoomOut,
   onResetNorth
 }: ViewerNavigationControlsProps) {
+  const { t } = useTranslation();
   const headingDeg = ((Math.round(bearingDeg) % 360) + 360) % 360;
 
   return (
@@ -39,7 +41,7 @@ export function ViewerNavigationControls({
       <Stack spacing={0}>
         <ButtonBase
           onClick={onZoomIn}
-          aria-label="zoom-in"
+          aria-label={t("viewer.zoomIn")}
           sx={{
             width: 34,
             height: 34,
@@ -55,7 +57,7 @@ export function ViewerNavigationControls({
         </ButtonBase>
         <ButtonBase
           onClick={onZoomOut}
-          aria-label="zoom-out"
+          aria-label={t("viewer.zoomOut")}
           sx={{
             width: 34,
             height: 34,
@@ -69,10 +71,10 @@ export function ViewerNavigationControls({
         >
           <RemoveRoundedIcon sx={{ fontSize: 18 }} />
         </ButtonBase>
-        <Tooltip title={`N ${headingDeg}°`} placement="left">
+        <Tooltip title={t("viewer.northHeading", { heading: headingDeg })} placement="left">
           <ButtonBase
             onClick={onResetNorth}
-            aria-label={`reset-north-${headingDeg}-degrees`}
+            aria-label={t("viewer.resetNorth", { heading: headingDeg })}
             sx={{
               width: 34,
               height: 34,

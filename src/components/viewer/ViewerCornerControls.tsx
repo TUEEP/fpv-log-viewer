@@ -38,7 +38,7 @@ export function ViewerCornerControls({
     >
       <ButtonBase
         onClick={onToggleViewMode}
-        aria-label={viewMode === "2d" ? "switch-to-3d" : "switch-to-2d"}
+        aria-label={t(viewMode === "2d" ? "viewer.switchTo3d" : "viewer.switchTo2d")}
         sx={{
           width: 36,
           minWidth: 36,
@@ -77,7 +77,7 @@ export function ViewerCornerControls({
           onAutoFollowChange(next.includes("auto"));
           onFrontFollowChange(next.includes("front"));
         }}
-        aria-label="follow-modes"
+        aria-label={t("viewer.followModes")}
         sx={{
           borderRadius: 0.8,
           overflow: "hidden",
@@ -121,7 +121,7 @@ export function ViewerCornerControls({
             defaultValue: "Auto follow center and zoom while playing"
           })}
         >
-          <ToggleButton value="auto" aria-label="follow-auto" sx={{ minWidth: 74 }}>
+          <ToggleButton value="auto" aria-label={t("viewer.followAuto")} sx={{ minWidth: 74 }}>
             <Typography sx={{ fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}>
               {t("toolbar.followAuto", { defaultValue: "Auto Follow" })}
             </Typography>
@@ -132,7 +132,7 @@ export function ViewerCornerControls({
             defaultValue: "Keep camera facing movement direction while playing"
           })}
         >
-          <ToggleButton value="front" aria-label="follow-front" sx={{ width: 30 }}>
+          <ToggleButton value="front" aria-label={t("viewer.followFront")} sx={{ width: 30 }}>
             <NearMeRoundedIcon sx={{ fontSize: 13 }} />
           </ToggleButton>
         </Tooltip>

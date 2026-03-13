@@ -12,7 +12,7 @@ import {
   Stack,
   Typography
 } from "@mui/material";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { playbackSpeedOptions } from "../../store/viewerStore";
 import type { PlaybackSpeed } from "../../types/flight";
@@ -57,6 +57,7 @@ export function PlaybackBar({
   onSeek
 }: PlaybackBarProps) {
   const { t } = useTranslation();
+  const speedLabelId = useId();
 
   const currentElapsed = useMemo(() => {
     if (currentTimestamp === null || startTimestamp === null) {
@@ -113,7 +114,7 @@ export function PlaybackBar({
           </IconButton>
 
           <Stack direction="row" spacing={0.75} alignItems="center" sx={{ pl: 0.5 }}>
-            <Typography variant="caption" color="text.secondary">
+            <Typography id={speedLabelId} variant="caption" color="text.secondary">
               {t("playback.speed")}
             </Typography>
             <Select
@@ -121,6 +122,7 @@ export function PlaybackBar({
               value={speed}
               onChange={(event) => onSpeedChange(Number(event.target.value) as PlaybackSpeed)}
               disabled={disabled}
+              inputProps={{ "aria-labelledby": speedLabelId }}
               sx={{ minWidth: 80 }}
             >
               {playbackSpeedOptions.map((option) => (
@@ -144,7 +146,13 @@ export function PlaybackBar({
               }
             }}
             disabled={disabled}
-            aria-label="playback-seek"
+            aria-label={t("playback.seek")}
+            getAriaValueText={(value) =>
+              t("playback.seekValue", {
+                current: Number(value) + 1,
+                total: Math.max(total, 1)
+              })
+            }
           />
         </Box>
 

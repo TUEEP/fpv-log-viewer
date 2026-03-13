@@ -11,7 +11,6 @@ import { ViewerSpeedLegend } from "./ViewerSpeedLegend";
 interface Viewer2DProps {
   points: FlightPoint[];
   smoothedTrack: [number, number][];
-  selectedIndex: number;
   currentIndex: number;
   playbackCursor: number;
   isPlaying: boolean;
@@ -23,7 +22,6 @@ interface Viewer2DProps {
   setAutoFollowMode: (enabled: boolean) => void;
   setFrontFollowMode: (enabled: boolean) => void;
   onToggleViewMode: () => void;
-  onSelect: (index: number) => void;
 }
 
 interface MapCoordPoint {
@@ -48,12 +46,10 @@ const SOURCE_SMOOTH = "fpv-smooth-track";
 const SOURCE_POINTS = "fpv-track-points";
 const LAYER_SMOOTH_OUTER = "fpv-smooth-line-outer";
 const LAYER_SMOOTH_INNER = "fpv-smooth-line-inner";
-const LAYER_MIDDLE = "fpv-point-middle";
 const LAYER_START = "fpv-point-start";
 const LAYER_END = "fpv-point-end";
 const LAYER_CURRENT = "fpv-point-current";
 const LAYER_CURRENT_RING = "fpv-point-current-ring";
-const LAYER_SELECTED = "fpv-point-selected";
 const PLAYBACK_TRAIL_WINDOW_MS = 10_000;
 const PLAYBACK_DATA_PUSH_INTERVAL_MS = 16;
 const PLAYBACK_MAX_LINE_VERTICES = 900;
@@ -420,20 +416,6 @@ function ensureLayers(map: maplibregl.Map) {
     });
   }
 
-  if (!map.getLayer(LAYER_MIDDLE)) {
-    map.addLayer({
-      id: LAYER_MIDDLE,
-      type: "circle",
-      source: SOURCE_POINTS,
-      filter: ["all", ["==", ["get", "role"], "middle"], ["==", ["get", "isActive"], 0]],
-      paint: {
-        "circle-color": "#76d2ff",
-        "circle-stroke-color": "#235f8e",
-        "circle-stroke-width": 1
-      }
-    });
-  }
-
   if (!map.getLayer(LAYER_START)) {
     map.addLayer({
       id: LAYER_START,
@@ -491,26 +473,11 @@ function ensureLayers(map: maplibregl.Map) {
       }
     });
   }
-
-  if (!map.getLayer(LAYER_SELECTED)) {
-    map.addLayer({
-      id: LAYER_SELECTED,
-      type: "circle",
-      source: SOURCE_POINTS,
-      filter: ["==", ["get", "isSelected"], 1],
-      paint: {
-        "circle-color": "rgba(0, 0, 0, 0)",
-        "circle-stroke-color": "#1f5a85",
-        "circle-stroke-width": 2
-      }
-    });
-  }
 }
 
 export function Viewer2D({
   points,
   smoothedTrack,
-  selectedIndex,
   currentIndex,
   playbackCursor,
   isPlaying,
@@ -521,13 +488,11 @@ export function Viewer2D({
   trackWidth,
   setAutoFollowMode,
   setFrontFollowMode,
-  onToggleViewMode,
-  onSelect
+  onToggleViewMode
 }: Viewer2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [mapBearingDeg, setMapBearingDeg] = useState(0);
-  const onSelectRef = useRef(onSelect);
   const trackCoordsRef = useRef<[number, number][]>([]);
   const trackOuterGradientRef = useRef<any>(TRACK_OUTER_GRADIENT_FALLBACK);
   const trackInnerGradientRef = useRef<any>(TRACK_INNER_GRADIENT_FALLBACK);
@@ -556,11 +521,7 @@ export function Viewer2D({
   const followLastTickRef = useRef(0);
   const followStateRef = useRef<{ lon: number; lat: number; zoom: number; bearing: number } | null>(null);
 
-  useEffect(() => {
-    lookAheadMsRef.current = FOLLOW_LOOK_AHEAD_DEFAULT_MS;
-  }, [points.length, mapProvider]);
-
-  const clearPendingDataPush = () => {
+  const clearPendingDataPush = useCallback(() => {
     if (dataPushTimerRef.current !== null) {
       window.clearTimeout(dataPushTimerRef.current);
       dataPushTimerRef.current = null;
@@ -569,43 +530,23 @@ export function Viewer2D({
       window.cancelAnimationFrame(dataPushRetryRafRef.current);
       dataPushRetryRafRef.current = null;
     }
-  };
+  }, []);
 
-  const clearPendingPointRadiiRetry = () => {
+  const clearPendingPointRadiiRetry = useCallback(() => {
     if (pointRadiiRetryRafRef.current !== null) {
       window.cancelAnimationFrame(pointRadiiRetryRafRef.current);
       pointRadiiRetryRafRef.current = null;
     }
-  };
+  }, []);
 
-  const clearCurrentPulseLoop = () => {
+  const clearCurrentPulseLoop = useCallback(() => {
     if (currentPulseRafRef.current !== null) {
       window.cancelAnimationFrame(currentPulseRafRef.current);
       currentPulseRafRef.current = null;
     }
-  };
+  }, []);
 
-  const schedulePointRadiiRetry = (map: maplibregl.Map) => {
-    if (pointRadiiRetryRafRef.current !== null) {
-      return;
-    }
-    pointRadiiRetryRafRef.current = window.requestAnimationFrame(() => {
-      pointRadiiRetryRafRef.current = null;
-      applyPointRadii(map);
-    });
-  };
-
-  const scheduleDataPushRetry = (map: maplibregl.Map) => {
-    if (dataPushRetryRafRef.current !== null) {
-      return;
-    }
-    dataPushRetryRafRef.current = window.requestAnimationFrame(() => {
-      dataPushRetryRafRef.current = null;
-      pushMapData(map);
-    });
-  };
-
-  const applyPointRadii = (map: maplibregl.Map) => {
+  const applyPointRadii = useCallback((map: maplibregl.Map) => {
     if (!map || !map.getStyle()) {
       return;
     }
@@ -615,19 +556,23 @@ export function Viewer2D({
       map.setPaintProperty(LAYER_SMOOTH_INNER, "line-gradient", trackInnerGradientRef.current);
       map.setPaintProperty(LAYER_SMOOTH_OUTER, "line-width", 5.8 * trackWidthRef.current);
       map.setPaintProperty(LAYER_SMOOTH_INNER, "line-width", 2.9 * trackWidthRef.current);
-      map.setPaintProperty(LAYER_MIDDLE, "circle-radius", 2.2 * trackWidthRef.current);
       map.setPaintProperty(LAYER_START, "circle-radius", 4.1 * trackWidthRef.current);
       map.setPaintProperty(LAYER_END, "circle-radius", 4.1 * trackWidthRef.current);
       map.setPaintProperty(LAYER_CURRENT, "circle-radius", 3.3 * trackWidthRef.current);
       map.setPaintProperty(LAYER_CURRENT_RING, "circle-stroke-width", 1.7 * trackWidthRef.current);
-      map.setPaintProperty(LAYER_SELECTED, "circle-radius", 4.8 * trackWidthRef.current);
       clearPendingPointRadiiRetry();
     } catch {
-      schedulePointRadiiRetry(map);
+      if (pointRadiiRetryRafRef.current !== null) {
+        return;
+      }
+      pointRadiiRetryRafRef.current = window.requestAnimationFrame(() => {
+        pointRadiiRetryRafRef.current = null;
+        applyPointRadii(map);
+      });
     }
-  };
+  }, [clearPendingPointRadiiRetry]);
 
-  const applyCurrentPulse = (map: maplibregl.Map, nowMs: number) => {
+  const applyCurrentPulse = useCallback((map: maplibregl.Map, nowMs: number) => {
     if (!map || !map.getStyle()) {
       return;
     }
@@ -642,9 +587,9 @@ export function Viewer2D({
     } catch {
       // Style may be transitioning; next frame will retry.
     }
-  };
+  }, []);
 
-  const startCurrentPulseLoop = (map: maplibregl.Map) => {
+  const startCurrentPulseLoop = useCallback((map: maplibregl.Map) => {
     clearCurrentPulseLoop();
 
     const tick = (now: number) => {
@@ -656,9 +601,9 @@ export function Viewer2D({
     };
 
     currentPulseRafRef.current = window.requestAnimationFrame(tick);
-  };
+  }, [applyCurrentPulse, clearCurrentPulseLoop]);
 
-  const pushMapData = (map: maplibregl.Map) => {
+  const pushMapData = useCallback((map: maplibregl.Map) => {
     if (!map || !map.getStyle()) {
       return;
     }
@@ -688,11 +633,17 @@ export function Viewer2D({
       lastDataPushAtRef.current = performance.now();
       clearPendingDataPush();
     } catch {
-      scheduleDataPushRetry(map);
+      if (dataPushRetryRafRef.current !== null) {
+        return;
+      }
+      dataPushRetryRafRef.current = window.requestAnimationFrame(() => {
+        dataPushRetryRafRef.current = null;
+        pushMapData(map);
+      });
     }
-  };
+  }, [clearPendingDataPush]);
 
-  const scheduleMapDataPush = (map: maplibregl.Map, throttled: boolean) => {
+  const scheduleMapDataPush = useCallback((map: maplibregl.Map, throttled: boolean) => {
     dataPushPendingRef.current = true;
     const flush = () => {
       const activeMap = mapRef.current ?? map;
@@ -722,18 +673,34 @@ export function Viewer2D({
         flush();
       }, waitMs);
     }
-  };
+  }, [clearPendingDataPush, pushMapData]);
 
   useEffect(() => {
     return () => {
-      clearPendingDataPush();
-      clearPendingPointRadiiRetry();
-      clearCurrentPulseLoop();
+      if (dataPushTimerRef.current !== null) {
+        window.clearTimeout(dataPushTimerRef.current);
+        dataPushTimerRef.current = null;
+      }
+      if (dataPushRetryRafRef.current !== null) {
+        window.cancelAnimationFrame(dataPushRetryRafRef.current);
+        dataPushRetryRafRef.current = null;
+      }
+      if (pointRadiiRetryRafRef.current !== null) {
+        window.cancelAnimationFrame(pointRadiiRetryRafRef.current);
+        pointRadiiRetryRafRef.current = null;
+      }
+      if (currentPulseRafRef.current !== null) {
+        window.cancelAnimationFrame(currentPulseRafRef.current);
+        currentPulseRafRef.current = null;
+      }
       dataPushPendingRef.current = false;
     };
   }, []);
 
-  const fitMapToTrack = (map: maplibregl.Map, flightPoints: Array<{ lon: number; lat: number }>) => {
+  const fitMapToTrack = useCallback(function fitMapToTrack(
+    map: maplibregl.Map,
+    flightPoints: Array<{ lon: number; lat: number }>
+  ) {
     if (flightPoints.length === 0) {
       return;
     }
@@ -752,7 +719,9 @@ export function Viewer2D({
         [flightPoints[0].lon, flightPoints[0].lat],
         [flightPoints[0].lon, flightPoints[0].lat]
       );
-      flightPoints.forEach((point) => bounds.extend([point.lon, point.lat]));
+      flightPoints.forEach((point) => {
+        bounds.extend([point.lon, point.lat]);
+      });
       map.fitBounds(bounds, {
         padding: 40,
         duration: 380,
@@ -761,11 +730,7 @@ export function Viewer2D({
     } catch {
       map.once("idle", () => fitMapToTrack(map, flightPoints));
     }
-  };
-
-  useEffect(() => {
-    onSelectRef.current = onSelect;
-  }, [onSelect]);
+  }, []);
 
   const displayPoints = useMemo<MapCoordPoint[]>(() => {
     return points.map((point) => {
@@ -994,9 +959,6 @@ export function Viewer2D({
     includeIndexes.add(0);
     includeIndexes.add(points.length - 1);
 
-    if (selectedIndex >= 0 && selectedIndex < points.length) {
-      includeIndexes.add(selectedIndex);
-    }
     if (currentIndex >= 0 && currentIndex < points.length) {
       includeIndexes.add(currentIndex);
     }
@@ -1014,8 +976,6 @@ export function Viewer2D({
       const role =
         index === 0 ? "start" : index === points.length - 1 ? "end" : "middle";
       const isCurrent = index === currentIndex ? 1 : 0;
-      const isSelected = index === selectedIndex ? 1 : 0;
-      const isActive = isCurrent || isSelected ? 1 : 0;
       const coordPoint =
         isCurrent && interpolatedCurrentPoint ? interpolatedCurrentPoint : displayPoint;
 
@@ -1024,9 +984,7 @@ export function Viewer2D({
         properties: {
           index,
           role,
-          isCurrent,
-          isSelected,
-          isActive
+          isCurrent
         },
         geometry: {
           type: "Point",
@@ -1036,7 +994,7 @@ export function Viewer2D({
     });
 
     return result;
-  }, [points, displayPoints, selectedIndex, currentIndex, playbackCursor]);
+  }, [points, displayPoints, currentIndex, playbackCursor]);
 
   useEffect(() => {
     trackCoordsRef.current = trackStyleData.coordinates;
@@ -1046,14 +1004,14 @@ export function Viewer2D({
     if (mapRef.current) {
       scheduleMapDataPush(mapRef.current, isPlaying);
     }
-  }, [trackStyleData, pointFeatures, isPlaying]);
+  }, [trackStyleData, pointFeatures, isPlaying, scheduleMapDataPush]);
 
   useEffect(() => {
     trackWidthRef.current = trackWidth;
     if (mapRef.current) {
       applyPointRadii(mapRef.current);
     }
-  }, [trackWidth]);
+  }, [trackWidth, applyPointRadii]);
 
   const syncMapBearing = useCallback((map: maplibregl.Map) => {
     const nextBearing = normalizeBearingDeg(map.getBearing());
@@ -1105,39 +1063,11 @@ export function Viewer2D({
     syncMapBearing(map);
     let cleanupManualFollow: (() => void) | null = null;
 
-    const clickableLayers = [LAYER_MIDDLE, LAYER_START, LAYER_END, LAYER_CURRENT, LAYER_CURRENT_RING, LAYER_SELECTED];
-
     const handleLoad = () => {
       ensureLayers(map);
       applyPointRadii(map);
       pushMapData(map);
       startCurrentPulseLoop(map);
-
-      const onMapClick = (event: maplibregl.MapMouseEvent) => {
-        const features = map.queryRenderedFeatures(event.point, { layers: clickableLayers });
-        const target = features[0];
-        if (!target?.properties) {
-          return;
-        }
-
-        const index = Number(target.properties.index);
-        if (Number.isFinite(index)) {
-          onSelectRef.current(index);
-        }
-      };
-      map.on("click", onMapClick);
-
-      const onLayerMouseEnter = () => {
-        map.getCanvas().style.cursor = "pointer";
-      };
-      const onLayerMouseLeave = () => {
-        map.getCanvas().style.cursor = "";
-      };
-
-      clickableLayers.forEach((layerId) => {
-        map.on("mouseenter", layerId, onLayerMouseEnter);
-        map.on("mouseleave", layerId, onLayerMouseLeave);
-      });
 
       const markManualFollow = () => {
         manualFollowUntilRef.current = performance.now() + FOLLOW_MANUAL_HOLD_MS;
@@ -1152,11 +1082,6 @@ export function Viewer2D({
         map.off("dragstart", markManualFollow);
         canvas.removeEventListener("wheel", onCanvasWheel);
         canvas.removeEventListener("pointerdown", onCanvasPointerDown);
-        map.off("click", onMapClick);
-        clickableLayers.forEach((layerId) => {
-          map.off("mouseenter", layerId, onLayerMouseEnter);
-          map.off("mouseleave", layerId, onLayerMouseLeave);
-        });
       };
 
       if (displayPoints.length > 0) {
@@ -1182,7 +1107,20 @@ export function Viewer2D({
       map.remove();
       mapRef.current = null;
     };
-  }, [mapProvider, mapStyle, displayPoints, points.length, syncMapBearing]);
+  }, [
+    mapProvider,
+    mapStyle,
+    displayPoints,
+    points.length,
+    syncMapBearing,
+    applyPointRadii,
+    pushMapData,
+    startCurrentPulseLoop,
+    fitMapToTrack,
+    clearPendingDataPush,
+    clearPendingPointRadiiRetry,
+    clearCurrentPulseLoop
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1193,7 +1131,7 @@ export function Viewer2D({
     applyPointRadii(map);
     pushMapData(map);
     fitMapToTrack(map, displayPoints);
-  }, [displayPoints, points.length, mapProvider, mapStyle]);
+  }, [displayPoints, points.length, applyPointRadii, pushMapData, fitMapToTrack]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1389,7 +1327,7 @@ export function Viewer2D({
       }
       followLastTickRef.current = 0;
     };
-  }, [isPlaying, autoFollowMode, frontFollowMode, points.length, mapProvider, mapStyle]);
+  }, [isPlaying, autoFollowMode, frontFollowMode]);
 
   return (
     <div className="viewer-canvas" style={{ position: "relative" }}>

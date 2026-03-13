@@ -23,7 +23,9 @@
     "dark": "ダーク",
     "light": "ライト",
     "trackWidth": "軌跡太さ",
+    "trackWidthValue": "軌跡太さ {{value}}",
     "zScale": "Z スケール",
+    "zScaleValue": "Z スケール {{value}}",
     "fullscreen": "全画面",
     "mapSource": "地図ソース",
     "sourceOsm": "OpenStreetMap",
@@ -38,7 +40,9 @@
     "frame": "フレーム",
     "time": "時間",
     "slower": "減速",
-    "faster": "加速"
+    "faster": "加速",
+    "seek": "再生タイムラインを移動",
+    "seekValue": "{{total}} フレーム中 {{current}} フレーム目"
   },
   "panel": {
     "title": "軌跡ポイント詳細",
@@ -54,6 +58,17 @@
     "field": "項目",
     "value": "値",
     "noData": "データがありません。"
+  },
+  "viewer": {
+    "switchTo2d": "2D ビューに切り替え",
+    "switchTo3d": "3D ビューに切り替え",
+    "followModes": "追従モード",
+    "followAuto": "自動追従を有効化",
+    "followFront": "進行方向へカメラを向け続ける",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "resetNorth": "地図の向きを北に戻す。現在の方位 {{heading}} 度",
+    "northHeading": "北、{{heading}} 度"
   },
   "viewer3d": {
     "slow": "遅い",
